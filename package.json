@@ -5,7 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "build": "cd client && npm install && npm run build"
+    "build": "cd client && npm install --omit=dev && npm run build"
   },
   "keywords": ["speed-reading", "rsvp", "orp", "reader"],
   "author": "Kim",
