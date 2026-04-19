@@ -1,0 +1,10 @@
+node_modules/
+client/node_modules/
+server/uploads/
+*.log
+.env
+.DS_Store
+client/build/
+client/dist/
+*.pdf
+dist/
