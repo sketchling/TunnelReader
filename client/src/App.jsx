@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TunnelReader from './TunnelReader';
 
+const API_URL = ''; // Use relative paths - Vite proxy handles it
+
 function App() {
   const [view, setView] = useState('upload'); // 'upload' | 'reader'
   const [words, setWords] = useState([]);
@@ -20,7 +22,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
       
-      const response = await fetch('/api/extract/file', {
+      const response = await fetch(`${API_URL}/api/extract/file`, {
         method: 'POST',
         body: formData
       });
@@ -47,7 +49,7 @@ function App() {
     setError(null);
     
     try {
-      const response = await fetch('/api/extract/url', {
+      const response = await fetch(`${API_URL}/api/extract/url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url.trim() })

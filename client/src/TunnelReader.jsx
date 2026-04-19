@@ -31,20 +31,29 @@ function TunnelReader({ words, onBack }) {
     
     const combined = chunk.map(w => w.original).join(' ');
     
-    // Calculate ORP for the combined chunk
-    const totalLength = combined.length;
-    const orpIndex = Math.min(
-      Math.max(1, Math.floor(totalLength / 3)),
-      totalLength - 1
-    );
+    // Calculate ORP for combined chunk using same logic as server
+    const cleanCombined = combined.replace(/[.,!?;:()-]/g, '');
+    const length = cleanCombined.length;
+    const isEven = length % 2 === 0;
+    
+    let middleIndex;
+    let shiftRight = 0;
+    
+    if (isEven) {
+      middleIndex = length / 2;
+    } else {
+      middleIndex = Math.floor(length / 2);
+    }
     
     return {
       original: combined,
-      beforeORP: combined.slice(0, orpIndex),
-      orpChar: combined[orpIndex],
-      afterORP: combined.slice(orpIndex + 1),
-      orpIndex,
-      length: totalLength
+      beforeORP: combined.slice(0, middleIndex),
+      orpChar: combined[middleIndex],
+      afterORP: combined.slice(middleIndex + 1),
+      orpIndex: middleIndex,
+      length,
+      isEven,
+      shiftRight
     };
   }, [words, currentIndex, chunkSize]);
 
@@ -171,8 +180,11 @@ function TunnelReader({ words, onBack }) {
 
       <div className="reader-container">
         <div className="word-display">
+          {/* Fixed ORP anchor guide */}
+          <div className="orp-anchor" />
+          
           {currentWord ? (
-            <span className="word">
+            <span className="word-wrapper">
               <span className="word-before">{currentWord.beforeORP}</span>
               <span className="word-orp">{currentWord.orpChar}</span>
               <span className="word-after">{currentWord.afterORP}</span>
@@ -182,82 +194,83 @@ function TunnelReader({ words, onBack }) {
           )}
         </div>
 
-        <div className="progress-container">
-          <div className="progress-bar">
-            <div 
-              className="progress-fill" 
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <div className="progress-text">
-            Word {currentIndex + 1} of {words.length} • ~{estimatedTime} min remaining
-          </div>
-        </div>
-
-        <div className="controls">
-          <div className="control-buttons">
-            <button className="control-btn" onClick={rewind} title="Rewind 10 words">
-              ⏪
-            </button>
-            <button className="control-btn" onClick={reset} title="Reset (Home)">
-              ⏮
-            </button>
-            <button 
-              className="control-btn primary" 
-              onClick={togglePlay}
-              title="Play/Pause (Space)"
-            >
-              {isPlaying ? '⏸' : '▶'}
-            </button>
-            <button className="control-btn" onClick={fastForward} title="Forward 10 words">
-              ⏩
-            </button>
-          </div>
-
-          <div className="sliders">
-            <div className="slider-group">
-              <label className="slider-label">
-                Speed: <strong>{wpm} WPM</strong>
-              </label>
-              <input
-                type="range"
-                className="slider"
-                min="100"
-                max="1000"
-                step="25"
-                value={wpm}
-                onChange={(e) => setWpm(Number(e.target.value))}
-                title="Arrow Up/Down to adjust"
+        <div className="bottom-ui">
+          <div className="progress-container">
+            <div className="progress-bar">
+              <div 
+                className="progress-fill" 
+                style={{ width: `${progress}%` }}
               />
             </div>
-
-            <div className="slider-group">
-              <label className="slider-label">
-                Words at once: <strong>{chunkSize}</strong>
-              </label>
-              <input
-                type="range"
-                className="slider"
-                min="1"
-                max="5"
-                step="1"
-                value={chunkSize}
-                onChange={(e) => setChunkSize(Number(e.target.value))}
-              />
+            <div className="progress-text">
+              Word {currentIndex + 1} of {words.length} • ~{estimatedTime} min remaining
             </div>
+          </div>
+
+          <div className="controls">
+            <div className="control-buttons">
+              <button className="control-btn" onClick={rewind} title="Rewind 10 words">
+                ⏪
+              </button>
+              <button className="control-btn" onClick={reset} title="Reset (Home)">
+                ⏮
+              </button>
+              <button 
+                className="control-btn primary" 
+                onClick={togglePlay}
+                title="Play/Pause (Space)"
+              >
+                {isPlaying ? '⏸' : '▶'}
+              </button>
+              <button className="control-btn" onClick={fastForward} title="Forward 10 words">
+                ⏩
+              </button>
+            </div>
+
+            <div className="sliders">
+              <div className="slider-group">
+                <label className="slider-label">
+                  Speed: <strong>{wpm} WPM</strong>
+                </label>
+                <input
+                  type="range"
+                  className="slider"
+                  min="100"
+                  max="1000"
+                  step="25"
+                  value={wpm}
+                  onChange={(e) => setWpm(Number(e.target.value))}
+                  title="Arrow Up/Down to adjust"
+                />
+              </div>
+
+              <div className="slider-group">
+                <label className="slider-label">
+                  Words at once: <strong>{chunkSize}</strong>
+                </label>
+                <input
+                  type="range"
+                  className="slider"
+                  min="1"
+                  max="5"
+                  step="1"
+                  value={chunkSize}
+                  onChange={(e) => setChunkSize(Number(e.target.value))}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="keyboard-hint">
+            Space: Play/Pause • ← →: Navigate • ↑ ↓: Speed • Home: Reset • Esc: Back
           </div>
         </div>
       </div>
 
-      <div style={{
-        position: 'fixed',
-        bottom: '10px',
-        right: '10px',
-        fontSize: '0.75rem',
-        color: '#444'
-      }}>
-        Space: Play/Pause • ← →: Navigate • ↑ ↓: Speed • Home: Reset • Esc: Back
-      </div>
+      {/* Baseline guide */}
+      <div className="baseline-guide" />
+
+
     </div>
   );
 }

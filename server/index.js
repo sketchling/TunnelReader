@@ -7,6 +7,7 @@ const { extractFromPDF, extractFromURL, extractFromText } = require('./extractor
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
@@ -36,7 +37,12 @@ const upload = multer({
   }
 });
 
-app.use(cors());
+// CORS configuration - allow all origins in development
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '../client/build')));
 
@@ -137,18 +143,31 @@ function processText(text) {
   const words = cleaned.split(/\s+/).filter(w => w.length > 0);
   
   return words.map((word, index) => {
-    // Calculate ORP (Optimal Recognition Point)
-    // For most words, the ORP is roughly 1/3 from the start
-    // Minimum of 1, maximum at length-1
-    const orpIndex = Math.min(
-      Math.max(1, Math.floor(word.length / 3)),
-      word.length - 1
-    );
+    // Strip punctuation for length calculation
+    const cleanWord = word.replace(/[.,!?;:()-]/g, '');
+    const length = cleanWord.length;
     
-    // Split word into: before ORP, ORP char, after ORP
-    const beforeORP = word.slice(0, orpIndex);
-    const orpChar = word[orpIndex];
-    const afterORP = word.slice(orpIndex + 1);
+    const isEven = length % 2 === 0;
+    
+    // With monospace font, centering is exact math:
+    // - Odd: middle character (floor(n/2)) is exactly at center
+    // - Even: character at n/2 puts the gap at visual center (standard RSVP)
+    let middleIndex;
+    let shiftRight = 0;
+    
+    if (isEven) {
+      // Even: character at position n/2 (the first of the "right half")
+      // This puts the visual center at the gap after this character
+      middleIndex = length / 2;
+    } else {
+      // Odd: exact middle character
+      middleIndex = Math.floor(length / 2);
+    }
+    
+    // Split word into: before middle, middle char, after middle
+    const beforeORP = word.slice(0, middleIndex);
+    const orpChar = word[middleIndex];
+    const afterORP = word.slice(middleIndex + 1);
     
     return {
       index,
@@ -156,8 +175,10 @@ function processText(text) {
       beforeORP,
       orpChar,
       afterORP,
-      orpIndex,
-      length: word.length
+      orpIndex: middleIndex,
+      length,
+      isEven,
+      shiftRight
     };
   });
 }
@@ -167,6 +188,6 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 TunnelReader server running on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 TunnelReader server running on http://${HOST}:${PORT}`);
 });
