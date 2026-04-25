@@ -7,16 +7,23 @@
     "start": "node server/index.js",
     "build": "cd client && npm install --omit=dev && npm run build"
   },
-  "keywords": ["speed-reading", "rsvp", "orp", "reader"],
+  "keywords": [
+    "speed-reading",
+    "rsvp",
+    "orp",
+    "reader"
+  ],
   "author": "Kim",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "multer": "^1.4.5-lts.1",
-    "pdf-parse": "^1.1.1",
+    "adm-zip": "^0.5.17",
+    "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12",
-    "axios": "^1.6.0"
+    "cors": "^2.8.5",
+    "epub2": "^3.0.2",
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

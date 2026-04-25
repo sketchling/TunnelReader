@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TunnelReader from './TunnelReader';
+import BrowseLibrary from './BrowseLibrary';
 
 const API_URL = ''; // Use relative paths - Vite proxy handles it
 
@@ -8,9 +9,10 @@ function App() {
   const [words, setWords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('file'); // 'file' | 'url' | 'text'
+  const [activeTab, setActiveTab] = useState('file'); // 'file' | 'url' | 'text' | 'browse'
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
+  const [bookTitle, setBookTitle] = useState('');
 
   const handleFileUpload = useCallback(async (file) => {
     if (!file) return;
@@ -116,7 +118,14 @@ function App() {
   const handleBack = useCallback(() => {
     setView('upload');
     setWords([]);
+    setBookTitle('');
     setError(null);
+  }, []);
+
+  const handleBookSelect = useCallback((wordsArray, title = '') => {
+    setWords(wordsArray);
+    setBookTitle(title || 'Book');
+    setView('reader');
   }, []);
 
   // Drag and drop visual feedback
@@ -138,7 +147,7 @@ function App() {
   }, [handleDrop]);
 
   if (view === 'reader') {
-    return <TunnelReader words={words} onBack={handleBack} />;
+    return <TunnelReader words={words} onBack={handleBack} title={bookTitle} />;
   }
 
   return (
@@ -167,6 +176,12 @@ function App() {
           >
             ✏️ Paste Text
           </button>
+          <button 
+            className={`tab-btn ${activeTab === 'browse' ? 'active' : ''}`}
+            onClick={() => setActiveTab('browse')}
+          >
+            📚 Browse Library
+          </button>
         </div>
 
         {error && (
@@ -188,12 +203,12 @@ function App() {
               id="file-input"
               type="file"
               className="file-input"
-              accept=".pdf,.txt,.md"
+              accept=".pdf,.txt,.md,.epub"
               onChange={(e) => handleFileUpload(e.target.files[0])}
             />
             <h3>Drop a file here, or click to browse</h3>
             <p style={{ color: '#888', marginTop: '0.5rem' }}>
-              Supports PDF, TXT, MD (max 10MB)
+              Supports PDF, TXT, MD, EPUB (max 10MB)
             </p>
           </div>
         )}
@@ -234,6 +249,10 @@ function App() {
               {loading ? 'Processing...' : 'Start Reading'}
             </button>
           </div>
+        )}
+
+        {activeTab === 'browse' && (
+          <BrowseLibrary onBookSelect={handleBookSelect} />
         )}
       </main>
     </div>

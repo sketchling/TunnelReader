@@ -2,6 +2,7 @@ const fs = require('fs');
 const pdfParse = require('pdf-parse');
 const cheerio = require('cheerio');
 const axios = require('axios');
+const AdmZip = require('adm-zip');
 
 // Extract text from PDF file
 async function extractFromPDF(filePath) {
@@ -83,8 +84,61 @@ function extractFromText(text) {
   return text.trim();
 }
 
+// Extract text from EPUB file using adm-zip
+async function extractFromEPUB(filePath) {
+  try {
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+    
+    let textContent = '';
+    const htmlFiles = [];
+    
+    for (const entry of entries) {
+      const entryName = entry.entryName;
+      if (entryName.endsWith('.xhtml') || entryName.endsWith('.html') || entryName.endsWith('.htm')) {
+        if (!entryName.includes('toc') && !entryName.includes('nav')) {
+          htmlFiles.push(entry.getData().toString('utf8'));
+        }
+      }
+    }
+    
+    for (const html of htmlFiles) {
+      const $ = cheerio.load(html);
+      $('script, style').remove();
+      textContent += $.text() + '\n\n';
+    }
+    
+    if (!textContent || textContent.length < 100) {
+      for (const entry of entries) {
+        const entryName = entry.entryName;
+        if (entryName.endsWith('.xhtml') || entryName.endsWith('.html') || entryName.endsWith('.htm')) {
+          const html = entry.getData().toString('utf8');
+          const $ = cheerio.load(html);
+          $('script, style').remove();
+          textContent += $.text() + '\n\n';
+        }
+      }
+    }
+    
+    textContent = textContent
+      .replace(/\s+/g, ' ')
+      .replace(/\n+/g, '\n')
+      .trim();
+    
+    if (!textContent || textContent.length < 100) {
+      throw new Error('Could not extract text from EPUB');
+    }
+    
+    return textContent;
+  } catch (error) {
+    console.error('EPUB extraction error:', error);
+    throw new Error('Failed to extract text from EPUB');
+  }
+}
+
 module.exports = {
   extractFromPDF,
   extractFromURL,
-  extractFromText
+  extractFromText,
+  extractFromEPUB
 };

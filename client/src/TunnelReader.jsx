@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 
-function TunnelReader({ words, onBack }) {
+function TunnelReader({ words, onBack, title }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(300);
@@ -140,26 +140,31 @@ function TunnelReader({ words, onBack }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [togglePlay, advance, reset, onBack, chunkSize]);
 
-  // Playback interval
+  // Playback with variable delay — add 30% pause on fullstops
   useEffect(() => {
-    if (isPlaying) {
-      const delay = getDelay();
-      intervalRef.current = setInterval(() => {
-        advance();
-      }, delay);
-    } else {
+    if (!isPlaying) {
       if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+        clearTimeout(intervalRef.current);
         intervalRef.current = null;
       }
+      return;
     }
+
+    const delay = getDelay();
+    const currentWord = getCurrentDisplay();
+    const endsSentence = currentWord?.original?.endsWith('.');
+    const wordDelay = endsSentence ? delay * 1.3 : delay;
+
+    intervalRef.current = setTimeout(() => {
+      advance();
+    }, wordDelay);
 
     return () => {
       if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+        clearTimeout(intervalRef.current);
       }
     };
-  }, [isPlaying, getDelay, advance]);
+  }, [isPlaying, currentIndex, getDelay, advance, getCurrentDisplay]);
 
   // Auto-focus container on mount
   useEffect(() => {

@@ -3,7 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { extractFromPDF, extractFromURL, extractFromText } = require('./extractor');
+const { extractFromPDF, extractFromURL, extractFromText, extractFromEPUB } = require('./extractor');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -27,12 +27,12 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.pdf', '.txt', '.md', '.doc', '.docx'];
+    const allowedTypes = ['.pdf', '.txt', '.md', '.doc', '.docx', '.epub'];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowedTypes.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Allowed: PDF, TXT, MD, DOC, DOCX'));
+      cb(new Error('Invalid file type. Allowed: PDF, TXT, MD, DOC, DOCX, EPUB'));
     }
   }
 });
@@ -65,6 +65,8 @@ app.post('/api/extract/file', upload.single('file'), async (req, res) => {
     
     if (ext === '.pdf') {
       text = await extractFromPDF(filePath);
+    } else if (ext === '.epub') {
+      text = await extractFromEPUB(filePath);
     } else {
       // For txt, md, etc.
       text = fs.readFileSync(filePath, 'utf-8');
@@ -129,6 +131,335 @@ app.post('/api/extract/text', (req, res) => {
   } catch (error) {
     console.error('Text extraction error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// OPDS Catalog APIs
+const CATALOGS = {
+  gutenberg: 'https://gutendex.com/books',
+  standardEbooks: 'https://standardebooks.org/opds'
+};
+
+// Search OPDS catalogs
+app.get('/api/catalog/search', async (req, res) => {
+  try {
+    const { source, query, page = 1 } = req.query;
+    
+    if (!source || !CATALOGS[source]) {
+      return res.status(400).json({ error: 'Invalid source. Use: gutenberg, standardEbooks' });
+    }
+
+    const catalogUrl = CATALOGS[source];
+    let searchUrl = catalogUrl;
+    
+    if (source === 'gutenberg') {
+      searchUrl = `${catalogUrl}?search=${encodeURIComponent(query || '')}&page=${page}`;
+    }
+
+    const response = await axios.get(searchUrl, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'TunnelReader/1.0'
+      }
+    });
+
+    let books = [];
+    
+    if (source === 'gutenberg') {
+      const data = response.data;
+      books = (data.results || []).map(book => ({
+        id: book.id?.toString() || book.gutenberg_id?.toString(),
+        title: book.title,
+        authors: book.authors?.map(a => a.name).join(', ') || 'Unknown',
+        formats: book.formats || {},
+        covers: book.formats?.['image/jpeg'] ? [book.formats['image/jpeg']] : [],
+        downloads: book.download_count || 0
+      }));
+    } else if (source === 'standardEbooks') {
+      const $ = cheerio.load(response.data);
+      $('entry').each((i, el) => {
+        const $el = $(el);
+        const links = [];
+        $el.find('link').each((j, link) => {
+          links.push({
+            type: $(link).attr('type'),
+            href: $(link).attr('href')
+          });
+        });
+        const title = $el.find('title').text();
+        const author = $el.find('author name').text();
+        const id = $el.find('id').text();
+        const cover = links.find(l => l.type?.includes('image'))?.href;
+        const epubLink = links.find(l => l.type?.includes('epub'))?.href || links.find(l => l.href?.endsWith('.epub'))?.href;
+        
+        if (title) {
+          books.push({
+            id: id || title,
+            title,
+            authors: author || 'Unknown',
+            covers: cover ? [cover] : [],
+            epubUrl: epubLink
+          });
+        }
+      });
+    }
+
+    res.json({ success: true, books, page: parseInt(page) });
+  } catch (error) {
+    console.error('Catalog search error:', error);
+    res.status(500).json({ error: 'Failed to search catalog' });
+  }
+});
+
+// Get book details and download link
+app.get('/api/catalog/book/:source/:id', async (req, res) => {
+  try {
+    const { source, id } = req.params;
+
+    if (!CATALOGS[source]) {
+      return res.status(400).json({ error: 'Invalid source' });
+    }
+
+    let bookData = {};
+
+    if (source === 'gutenberg') {
+      const response = await axios.get(`${CATALOGS.gutenberg}/${id}`, {
+        timeout: 15000,
+        headers: { 'User-Agent': 'TunnelReader/1.0' }
+      });
+      
+      const book = response.data;
+      const epubLink = book.formats?.['application/epub+zip'];
+      const textPlainLink = book.formats?.['text/plain; charset=utf-8'] || book.formats?.['text/plain'];
+      
+      bookData = {
+        id: book.id?.toString(),
+        title: book.title,
+        authors: book.authors?.map(a => a.name).join(', ') || 'Unknown',
+        subjects: book.subjects || [],
+        bookshelves: book.bookshelves || [],
+        languages: book.languages || [],
+        copyright: book.copyright,
+        downloads: book.download_count,
+        covers: book.formats?.['image/jpeg'] ? [book.formats['image/jpeg']] : [],
+        epubUrl: epubLink,
+        textUrl: textPlainLink
+      };
+    } else if (source === 'standardEbooks') {
+      const response = await axios.get(`${CATALOGS.standardEbooks}/works/${id}`, {
+        timeout: 15000,
+        headers: { 'User-Agent': 'TunnelReader/1.0' }
+      });
+      
+      const $ = cheerio.load(response.data);
+      const links = [];
+      $('link').each((i, el) => {
+        links.push({
+          type: $(el).attr('type'),
+          href: $(el).attr('href')
+        });
+      });
+      
+      const epubLink = links.find(l => l.type?.includes('epub'))?.href || links.find(l => l.href?.endsWith('.epub'))?.href;
+      
+      bookData = {
+        id,
+        title: $('title').text(),
+        authors: $('author name').text() || 'Unknown',
+        covers: [],
+        epubUrl: epubLink
+      };
+    }
+
+    res.json({ success: true, book: bookData });
+  } catch (error) {
+    console.error('Book details error:', error);
+    res.status(500).json({ error: 'Failed to get book details' });
+  }
+});
+
+// Open Library API
+app.get('/api/openlibrary/search', async (req, res) => {
+  try {
+    const { query, page = 1 } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({ error: 'Query required' });
+    }
+
+    const offset = (parseInt(page) - 1) * 20;
+    const response = await axios.get(
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&offset=${offset}&limit=20`,
+      { timeout: 15000 }
+    );
+
+    const docs = response.data.docs || [];
+    const books = docs.map(doc => ({
+      id: doc.key?.replace('/works/', '') || doc.id,
+      title: doc.title,
+      authors: doc.author_name?.join(', ') || 'Unknown',
+      publishYear: doc.first_publish_year,
+      coverId: doc.cover_i,
+      hasFullText: doc.has_fulltext || false,
+      ebookCount: doc.ebook_count_i || 0
+    }));
+
+    res.json({ 
+      success: true, 
+      books,
+      page: parseInt(page),
+      total: response.data.numFound
+    });
+  } catch (error) {
+    console.error('Open Library search error:', error);
+    res.status(500).json({ error: 'Failed to search Open Library' });
+  }
+});
+
+// Get Open Library book details
+app.get('/api/openlibrary/book/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const response = await axios.get(
+      `https://openlibrary.org/works/${id}.json`,
+      { timeout: 15000 }
+    );
+
+    const book = response.data;
+    
+    res.json({
+      success: true,
+      book: {
+        id,
+        title: book.title,
+        description: typeof book.description === 'string' ? book.description : book.description?.value,
+        authors: book.authors?.map(a => a.name).join(', ') || 'Unknown',
+        covers: book.covers?.map(c => `https://covers.openlibrary.org/b/id/${c}-L.jpg`) || []
+      }
+    });
+  } catch (error) {
+    console.error('Open Library book error:', error);
+    res.status(500).json({ error: 'Failed to get book details' });
+  }
+});
+
+// Internet Archive API
+app.get('/api/archive/search', async (req, res) => {
+  try {
+    const { query, page = 1 } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({ error: 'Query required' });
+    }
+
+    const response = await axios.get(
+      `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=date&fl[]=downloads&rows=20&page=${page}&output=json`,
+      { timeout: 15000 }
+    );
+
+    const docs = response.data.response.docs || [];
+    const books = docs.map(doc => ({
+      id: doc.identifier,
+      title: doc.title,
+      authors: doc.creator || 'Unknown',
+      year: doc.date,
+      downloads: doc.downloads,
+      coverUrl: `https://archive.org/services/img/${doc.identifier}`
+    }));
+
+    res.json({ 
+      success: true, 
+      books,
+      page: parseInt(page)
+    });
+  } catch (error) {
+    console.error('Internet Archive search error:', error);
+    res.status(500).json({ error: 'Failed to search Internet Archive' });
+  }
+});
+
+// Get Internet Archive book details and download link
+app.get('/api/archive/book/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const response = await axios.get(
+      `https://archive.org/metadata/${id}`,
+      { timeout: 15000 }
+    );
+
+    const meta = response.data;
+    const files = meta.files || [];
+    
+    const epubFile = files.find(f => f.format === 'EPUB' || f.name?.endsWith('.epub'));
+    const textFile = files.find(f => f.format === 'DjVuTXT' || f.format === 'Text' || f.name?.endsWith('.txt'));
+    
+    const downloadUrls = {
+      epub: epubFile ? `https://archive.org/download/${id}/${epubFile.name}` : null,
+      text: textFile ? `https://archive.org/download/${id}/${textFile.name}` : null,
+      pdf: `https://archive.org/download/${id}/${id}_text.pdf`
+    };
+
+    res.json({
+      success: true,
+      book: {
+        id,
+        title: meta.title,
+        authors: meta.creator || 'Unknown',
+        description: meta.description,
+        year: meta.date,
+        downloads: meta.downloads,
+        coverUrl: `https://archive.org/services/img/${id}`,
+        downloadUrls
+      }
+    });
+  } catch (error) {
+    console.error('Internet Archive book error:', error);
+    res.status(500).json({ error: 'Failed to get book details' });
+  }
+});
+
+// Download and extract text from external URL
+app.post('/api/extract/external', async (req, res) => {
+  try {
+    const { url, title } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({ error: 'URL required' });
+    }
+
+    const isEpub = url.toLowerCase().endsWith('.epub');
+    
+    let text;
+    let tempFile;
+    
+    if (isEpub) {
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 60000,
+        headers: { 'User-Agent': 'TunnelReader/1.0' }
+      });
+      
+      tempFile = path.join(__dirname, 'uploads', `${Date.now()}-temp.epub`);
+      fs.writeFileSync(tempFile, response.data);
+      text = await extractFromEPUB(tempFile);
+      fs.unlinkSync(tempFile);
+    } else {
+      text = await extractFromURL(url);
+    }
+
+    const words = processText(text);
+    
+    res.json({ 
+      success: true, 
+      wordCount: words.length,
+      words,
+      title
+    });
+  } catch (error) {
+    console.error('External extraction error:', error);
+    res.status(500).json({ error: error.message || 'Failed to extract text from external source' });
   }
 });
 
