@@ -3,10 +3,29 @@ import React, { useState, useCallback, useEffect } from 'react';
 const API_URL = import.meta?.env?.DEV ? '' : `http://${window.location.hostname}:5000`;
 
 const SOURCES = [
-  { id: 'gutenberg', name: 'Project Gutenberg', type: 'opds' },
+  { id: 'gutenberg', name: 'Gutenberg', type: 'opds' },
   { id: 'standardEbooks', name: 'Standard Ebooks', type: 'opds' },
   { id: 'openlibrary', name: 'Open Library', type: 'api' },
   { id: 'archive', name: 'Internet Archive', type: 'api' }
+];
+
+const GUTENBERG_GENRES = [
+  { id: 'fiction', label: 'Fiction', search: 'fiction' },
+  { id: 'science-fiction', label: 'Science Fiction', search: 'science fiction' },
+  { id: 'mystery', label: 'Mystery', search: 'detective fiction' },
+  { id: 'adventure', label: 'Adventure', search: 'adventure fiction' },
+  { id: 'romance', label: 'Romance', search: 'romance fiction' },
+  { id: 'horror', label: 'Horror', search: 'horror fiction' },
+  { id: 'poetry', label: 'Poetry', search: 'poetry' },
+  { id: 'history', label: 'History', search: 'history' },
+  { id: 'philosophy', label: 'Philosophy', search: 'philosophy' },
+  { id: 'children', label: 'Children', search: 'children literature' },
+  { id: 'fantasy', label: 'Fantasy', search: 'fantasy fiction' },
+  { id: 'biography', label: 'Biography', search: 'biography autobiography' },
+  { id: 'drama', label: 'Drama', search: 'drama' },
+  { id: 'essays', label: 'Essays', search: 'essays' },
+  { id: 'travel', label: 'Travel', search: 'travel' },
+  { id: 'humor', label: 'Humor', search: 'humor satire' },
 ];
 
 function BrowseLibrary({ onBookSelect }) {
@@ -18,6 +37,64 @@ function BrowseLibrary({ onBookSelect }) {
   const [selectedBook, setSelectedBook] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [page, setPage] = useState(1);
+  const [activeCategory, setActiveCategory] = useState('fiction');
+  const [showResults, setShowResults] = useState(false);
+  
+  const searchUrl = useCallback(() => {
+    if (activeSource === 'gutenberg') {
+      const search = activeCategory ? 
+        GUTENBERG_GENRES.find(g => g.id === activeCategory)?.search || '' : '';
+      return `/api/catalog/search?source=gutenberg&search=${encodeURIComponent(search)}&page=1`;
+    } else if (activeSource === 'standardEbooks') {
+      return `/api/catalog/search?source=standardEbooks&page=1`;
+    } else if (activeSource === 'openlibrary') {
+      return `/api/openlibrary/search?query=classic&page=1`;
+    } else if (activeSource === 'archive') {
+      return `/api/archive/search?query=classic&page=1`;
+    }
+    return '';
+  }, [activeSource, activeCategory]);
+  
+  // Auto-load category results when Gutenberg source is selected
+  useEffect(() => {
+    setBooks([]);
+    setShowResults(false);
+    setQuery('');
+    
+    if (activeSource === 'gutenberg') {
+      browseCategory(activeCategory || 'fiction', 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSource]);
+
+  const browseCategory = useCallback(async (categoryId, pageNum = 1) => {
+    if (!categoryId) return;
+    setActiveCategory(categoryId);
+    
+    setLoading(true);
+    setSearching(false);
+    
+    try {
+      const genre = GUTENBERG_GENRES.find(g => g.id === categoryId);
+      const search = genre?.search || categoryId;
+      const endpoint = `/api/catalog/search?source=gutenberg&query=${encodeURIComponent(search)}&page=${pageNum}`;
+      const response = await fetch(`${API_URL}${endpoint}`);
+      const data = await response.json();
+      
+      if (data.success) {
+        setBooks(data.books);
+        setPage(pageNum);
+        setShowResults(true);
+      } else {
+        setBooks([]);
+      }
+    } catch (err) {
+      console.error('Browse error:', err);
+      setBooks([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const searchBooks = useCallback(async (searchQuery, pageNum = 1) => {
     if (!searchQuery.trim()) return;
@@ -28,8 +105,10 @@ function BrowseLibrary({ onBookSelect }) {
     try {
       let endpoint = '';
       
-      if (activeSource === 'gutenberg' || activeSource === 'standardEbooks') {
-        endpoint = `/api/catalog/search?source=${activeSource}&query=${encodeURIComponent(searchQuery)}&page=${pageNum}`;
+      if (activeSource === 'gutenberg') {
+        endpoint = `/api/catalog/search?source=gutenberg&query=${encodeURIComponent(searchQuery)}&page=${pageNum}`;
+      } else if (activeSource === 'standardEbooks') {
+        endpoint = `/api/catalog/search?source=standardEbooks&query=${encodeURIComponent(searchQuery)}&page=${pageNum}`;
       } else if (activeSource === 'openlibrary') {
         endpoint = `/api/openlibrary/search?query=${encodeURIComponent(searchQuery)}&page=${pageNum}`;
       } else if (activeSource === 'archive') {
@@ -42,6 +121,7 @@ function BrowseLibrary({ onBookSelect }) {
       if (data.success) {
         setBooks(data.books);
         setPage(pageNum);
+        setShowResults(true);
       } else {
         setBooks([]);
       }
@@ -69,23 +149,26 @@ function BrowseLibrary({ onBookSelect }) {
       if (activeSource === 'gutenberg') {
         const response = await fetch(`${API_URL}/api/catalog/book/gutenberg/${book.id}`);
         const data = await response.json();
-        details = data.book;
+        details = data.book || {};
+        // Ensure textUrl is available
+        if (!details.textUrl && details.formats?.['text/plain; charset=utf-8']) {
+          details.textUrl = details.formats['text/plain; charset=utf-8'];
+        }
       } else if (activeSource === 'standardEbooks') {
         const response = await fetch(`${API_URL}/api/catalog/book/standardEbooks/${book.id}`);
         const data = await response.json();
-        details = data.book;
+        details = data.book || {};
       } else if (activeSource === 'openlibrary') {
         const response = await fetch(`${API_URL}/api/openlibrary/book/${book.id}`);
         const data = await response.json();
-        details = data.book;
-        details.downloadUrl = details.coverUrl;
+        details = data.book || {};
       } else if (activeSource === 'archive') {
         const response = await fetch(`${API_URL}/api/archive/book/${book.id}`);
         const data = await response.json();
-        details = data.book;
+        details = data.book || {};
       }
       
-      setSelectedBook({ ...book, ...details });
+      setSelectedBook(prev => ({ ...prev, ...details }));
     } catch (err) {
       console.error('Error getting book details:', err);
     } finally {
@@ -102,6 +185,7 @@ function BrowseLibrary({ onBookSelect }) {
       let downloadUrl = null;
       let textUrl = null;
       
+      // Try EPUB or text download first (from any source)
       if (selectedBook.epubUrl) {
         downloadUrl = selectedBook.epubUrl;
       } else if (selectedBook.downloadUrls?.epub) {
@@ -110,38 +194,39 @@ function BrowseLibrary({ onBookSelect }) {
         textUrl = selectedBook.downloadUrls.text;
       } else if (selectedBook.textUrl) {
         textUrl = selectedBook.textUrl;
+      } else if (selectedBook.downloadUrls?.pdf) {
+        downloadUrl = selectedBook.downloadUrls.pdf;
       }
       
-      if (downloadUrl) {
-        const response = await fetch(`${API_URL}/api/extract/external`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: downloadUrl, title: selectedBook.title })
-        });
+      // Check for Open Library borrow-only book (no download URL)
+      const borrowOnly = selectedBook.borrowUrl && !downloadUrl && !textUrl;
+      
+      if (borrowOnly) {
+        alert('This book is available through Open Library borrowing. Opening it in your browser.');
+        window.open(selectedBook.borrowUrl, '_blank');
+        setDownloading(false);
+        return;
+      }
+      
+      const urlToUse = downloadUrl || textUrl;
+      if (!urlToUse) {
+        alert('No download format available for this book');
+        setDownloading(false);
+        return;
+      }
+      
+      const response = await fetch(`${API_URL}/api/extract/external`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlToUse, title: selectedBook.title })
+      });
         
-        const data = await response.json();
-        
-        if (data.success) {
-          onBookSelect(data.words, selectedBook.title);
-        } else {
-          alert('Failed to download book: ' + (data.error || 'Unknown error'));
-        }
-      } else if (textUrl) {
-        const response = await fetch(`${API_URL}/api/extract/external`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: textUrl, title: selectedBook.title })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-          onBookSelect(data.words, selectedBook.title);
-        } else {
-          alert('Failed to download book: ' + (data.error || 'Unknown error'));
-        }
+      const data = await response.json();
+          
+      if (data.success) {
+        onBookSelect(data.words, selectedBook.title);
       } else {
-        alert('No download available for this book');
+        alert('Failed to download book: ' + (data.error || 'Unknown error'));
       }
     } catch (err) {
       console.error('Download error:', err);
@@ -175,12 +260,26 @@ function BrowseLibrary({ onBookSelect }) {
           <button
             key={source.id}
             className={`tab-btn ${activeSource === source.id ? 'active' : ''}`}
-            onClick={() => { setActiveSource(source.id); setBooks([]); setQuery(''); }}
+            onClick={() => { setActiveSource(source.id); setBooks([]); setQuery(''); setCategories([]); }}
           >
             {source.name}
           </button>
         ))}
       </div>
+
+      {activeSource === 'gutenberg' && (
+        <div className="category-chips">
+          {GUTENBERG_GENRES.map(g => (
+            <button
+              key={g.id}
+              className={`chip ${activeCategory === g.id ? 'active' : ''}`}
+              onClick={() => browseCategory(g.id, 1)}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form className="search-form" onSubmit={handleSearch}>
         <input
