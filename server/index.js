@@ -7,7 +7,8 @@ const axios = require('axios');
 const { extractFromPDF, extractFromURL, extractFromText, extractFromEPUB, extractFromDOC, extractFromRTF, extractFromODT, extractFromHTMLFile, assertPublicUrl, blockPrivateRedirects } = require('./extractor');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+// 5001, not 5000: macOS AirPlay Receiver occupies 5000 by default.
+const PORT = process.env.PORT || 5001;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Multer configuration for file uploads
@@ -445,8 +446,11 @@ app.get('/api/archive/search', async (req, res) => {
       return res.status(400).json({ error: 'Query required' });
     }
 
+    // Restrict to texts: an unfiltered query returns podcasts, video and software
+    const q = `${query} AND mediatype:texts`;
+
     const response = await axios.get(
-      `https://archive.org/advancedsearch.php?q=${encodeURIComponent(query)}&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=date&fl[]=downloads&rows=20&page=${page}&output=json`,
+      `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=date&fl[]=downloads&rows=20&page=${page}&output=json`,
       { timeout: 15000 }
     );
 

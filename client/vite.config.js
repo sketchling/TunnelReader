@@ -1,8 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const LOCAL_IP = '192.168.20.56'
-
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -10,7 +8,9 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: `http://${LOCAL_IP}:5000`,
+        // The proxy runs on the dev machine, so localhost is correct even when
+        // the page is loaded from a phone over the LAN.
+        target: 'http://localhost:5001',
         changeOrigin: true
       }
     }

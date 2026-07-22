@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 
-const API_URL = import.meta?.env?.DEV ? '' : `http://${window.location.hostname}:5000`;
+const API_URL = ''; // Same origin: Vite proxy in dev, Express serves the build in prod
 
 // All catalogs are searched together; source is an implementation detail.
 const SOURCE_IDS = ['gutenberg', 'standardEbooks', 'openlibrary', 'archive'];
