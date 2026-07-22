@@ -1,14 +1,29 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 
-function TunnelReader({ words, onBack, title }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
+function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress }) {
+  const [currentIndex, setCurrentIndex] = useState(initialPosition);
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(300);
   const [chunkSize, setChunkSize] = useState(1);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isPaused, setIsPaused] = useState(initialPosition > 0);
   
   const intervalRef = useRef(null);
   const containerRef = useRef(null);
+
+  // Report reading position: throttled while reading, flushed on unmount
+  const progressRef = useRef({ index: initialPosition, lastSent: 0 });
+  useEffect(() => {
+    progressRef.current.index = currentIndex;
+    if (!onProgress) return;
+    const now = Date.now();
+    if (now - progressRef.current.lastSent > 2000) {
+      progressRef.current.lastSent = now;
+      onProgress(currentIndex);
+    }
+  }, [currentIndex, onProgress]);
+  useEffect(() => {
+    return () => { if (onProgress) onProgress(progressRef.current.index); };
+  }, [onProgress]);
 
   // Calculate delay based on WPM
   const getDelay = useCallback(() => {
@@ -31,18 +46,23 @@ function TunnelReader({ words, onBack, title }) {
     
     const combined = chunk.map(w => w.original).join(' ');
     
-    // Calculate ORP for combined chunk using same logic as server
-    const cleanCombined = combined.replace(/[.,!?;:()-]/g, '');
-    const length = cleanCombined.length;
-    const isEven = length % 2 === 0;
+    // True ORP for the chunk (same logic as server): position calculated on
+    // letter/digit characters only, then mapped back to the original string.
+    const length = combined.replace(/[^\p{L}\p{N}]/gu, '').length;
+    let orpClean;
+    if (length <= 1) orpClean = 0;
+    else if (length <= 5) orpClean = 1;
+    else if (length <= 9) orpClean = 2;
+    else if (length <= 13) orpClean = 3;
+    else orpClean = 4;
     
-    let middleIndex;
-    let shiftRight = 0;
-    
-    if (isEven) {
-      middleIndex = length / 2;
-    } else {
-      middleIndex = Math.floor(length / 2);
+    let middleIndex = Math.floor(combined.length / 2);
+    let seen = -1;
+    for (let i = 0; i < combined.length; i++) {
+      if (/[\p{L}\p{N}]/u.test(combined[i])) {
+        seen++;
+        if (seen === orpClean) { middleIndex = i; break; }
+      }
     }
     
     return {
@@ -52,8 +72,7 @@ function TunnelReader({ words, onBack, title }) {
       afterORP: combined.slice(middleIndex + 1),
       orpIndex: middleIndex,
       length,
-      isEven,
-      shiftRight
+      endsParagraph: chunk.some(w => w.endsParagraph)
     };
   }, [words, currentIndex, chunkSize]);
 
@@ -140,7 +159,66 @@ function TunnelReader({ words, onBack, title }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [togglePlay, advance, reset, onBack, chunkSize]);
 
-  // Playback with variable delay — add 30% pause on fullstops
+  // Touch gestures on the word zone: tap = play/pause, horizontal drag = scrub.
+  // Pointer events cover mouse, touch, and pencil (iOS 13+).
+  const gestureRef = useRef(null);
+  const SCRUB_PX_PER_WORD = 12; // drag distance per word scrubbed
+  const TAP_THRESHOLD = 10;     // px of movement before a tap becomes a drag
+
+  const handlePointerDown = useCallback((e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    gestureRef.current = { startX: e.clientX, startIndex: currentIndex, scrubbing: false };
+  }, [currentIndex]);
+
+  const handlePointerMove = useCallback((e) => {
+    const g = gestureRef.current;
+    if (!g) return;
+    const dx = e.clientX - g.startX;
+    if (!g.scrubbing && Math.abs(dx) > TAP_THRESHOLD) {
+      g.scrubbing = true;
+      setIsPlaying(false); // pause while scrubbing
+      setIsPaused(true);
+    }
+    if (g.scrubbing) {
+      // Drag right rewinds, drag left advances (timeline convention)
+      const delta = Math.round(dx / SCRUB_PX_PER_WORD) * chunkSize;
+      setCurrentIndex(Math.max(0, Math.min(words.length - 1, g.startIndex - delta)));
+    }
+  }, [chunkSize, words.length]);
+
+  const handlePointerEnd = useCallback((e) => {
+    const g = gestureRef.current;
+    gestureRef.current = null;
+    if (!g) return;
+    // A clean tap (no drag, not a cancel) toggles play/pause
+    if (!g.scrubbing && e.type === 'pointerup') {
+      togglePlay();
+    }
+  }, [togglePlay]);
+
+  // Smart pacing: how long should this word linger, relative to base delay?
+  const getPacingMultiplier = useCallback((display) => {
+    if (!display) return 1;
+    const text = display.original;
+    let m = 1;
+
+    // Punctuation pauses (allow trailing quotes/brackets after the mark)
+    if (/[.!?…]["'”’)\]]*$/.test(text)) m = 2.0;        // sentence end
+    else if (/[,;:—–]["'”’)\]]*$/.test(text)) m = 1.5;  // clause break
+
+    // Paragraph break: the longest breath
+    if (display.endsParagraph) m = Math.max(m, 2.5);
+
+    // Numbers take longer to parse than words of the same length
+    if (/\d/.test(text)) m = Math.max(m, 1.5);
+
+    // Long words need more recognition time (+8% per char over 8)
+    if (display.length > 8) m += (display.length - 8) * 0.08;
+
+    return m;
+  }, []);
+
+  // Playback with smart variable delay
   useEffect(() => {
     if (!isPlaying) {
       if (intervalRef.current) {
@@ -152,8 +230,7 @@ function TunnelReader({ words, onBack, title }) {
 
     const delay = getDelay();
     const currentWord = getCurrentDisplay();
-    const endsSentence = currentWord?.original?.endsWith('.');
-    const wordDelay = endsSentence ? delay * 1.3 : delay;
+    const wordDelay = delay * getPacingMultiplier(currentWord);
 
     intervalRef.current = setTimeout(() => {
       advance();
@@ -164,7 +241,7 @@ function TunnelReader({ words, onBack, title }) {
         clearTimeout(intervalRef.current);
       }
     };
-  }, [isPlaying, currentIndex, getDelay, advance, getCurrentDisplay]);
+  }, [isPlaying, currentIndex, getDelay, advance, getCurrentDisplay, getPacingMultiplier]);
 
   // Auto-focus container on mount
   useEffect(() => {
@@ -177,6 +254,21 @@ function TunnelReader({ words, onBack, title }) {
   const progress = words.length > 0 ? ((currentIndex / words.length) * 100) : 0;
   const estimatedTime = Math.ceil((words.length - currentIndex) / wpm);
 
+  // When paused, show the surrounding sentence so the reader can re-anchor.
+  const getPauseContext = () => {
+    if (!isPaused || !currentWord || words.length === 0) return null;
+    const endsSentence = (w) => /[.!?…]["'”’)\]]*$/.test(w.original);
+    const MAX_REACH = 30; // cap either side so run-on sentences stay readable
+
+    let start = currentIndex;
+    while (start > 0 && currentIndex - start < MAX_REACH && !endsSentence(words[start - 1])) start--;
+    let end = currentIndex;
+    while (end < words.length - 1 && end - currentIndex < MAX_REACH && !endsSentence(words[end])) end++;
+
+    return { start, end };
+  };
+  const pauseContext = getPauseContext();
+
   return (
     <div className="app" ref={containerRef} tabIndex={0}>
       <button className="back-btn" onClick={onBack}>
@@ -184,6 +276,14 @@ function TunnelReader({ words, onBack, title }) {
       </button>
 
       <div className="reader-container">
+        <div
+          className="gesture-surface"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerEnd}
+          onPointerCancel={handlePointerEnd}
+        />
+
         <div className="word-display">
           {/* Fixed ORP anchor guide */}
           <div className="orp-anchor" />
@@ -198,6 +298,20 @@ function TunnelReader({ words, onBack, title }) {
             <span style={{ color: '#666' }}>Done!</span>
           )}
         </div>
+
+        {pauseContext && (
+          <div className="context-view">
+            {words.slice(pauseContext.start, pauseContext.end + 1).map((w, i) => {
+              const idx = pauseContext.start + i;
+              const isCurrent = idx >= currentIndex && idx < currentIndex + chunkSize;
+              return (
+                <span key={idx} className={isCurrent ? 'context-word current' : 'context-word'}>
+                  {w.original}{' '}
+                </span>
+              );
+            })}
+          </div>
+        )}
 
         <div className="bottom-ui">
           <div className="progress-container">

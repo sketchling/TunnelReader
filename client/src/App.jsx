@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TunnelReader from './TunnelReader';
 import BrowseLibrary from './BrowseLibrary';
+import { processText } from './processText';
+import { getLibrary, saveDoc, updatePosition, removeDoc } from './library';
 
 const API_URL = ''; // Use relative paths - Vite proxy handles it
 
@@ -13,6 +15,29 @@ function App() {
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [bookTitle, setBookTitle] = useState('');
+  const [docId, setDocId] = useState(null);
+  const [startPosition, setStartPosition] = useState(0);
+  const [savedDocs, setSavedDocs] = useState(() => getLibrary());
+
+  // Single path for opening any document: tokenize, persist, enter reader
+  const openDocument = useCallback((rawText, title, position = 0) => {
+    const processed = processText(rawText);
+    if (processed.length === 0) {
+      setError('No readable text found');
+      return;
+    }
+    const id = saveDoc({ title: title || 'Untitled', text: rawText, wordCount: processed.length });
+    if (id && position > 0) updatePosition(id, position);
+    setWords(processed);
+    setBookTitle(title || '');
+    setDocId(id);
+    setStartPosition(Math.min(position, processed.length - 1));
+    setView('reader');
+  }, []);
+
+  const handleProgress = useCallback((position) => {
+    updatePosition(docId, position);
+  }, [docId]);
 
   const handleFileUpload = useCallback(async (file) => {
     if (!file) return;
@@ -35,18 +60,15 @@ function App() {
         throw new Error(data.error || 'Failed to extract text');
       }
       
-      setWords(data.words);
-      setView('reader');
+      openDocument(data.text, file.name.replace(/\.[^.]+$/, ''));
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [openDocument]);
 
-  const handleUrlLoad = useCallback(async () => {
-    if (!url.trim()) return;
-    
+  const loadFromUrl = useCallback(async (urlString) => {
     setLoading(true);
     setError(null);
     
@@ -54,7 +76,7 @@ function App() {
       const response = await fetch(`${API_URL}/api/extract/url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() })
+        body: JSON.stringify({ url: urlString })
       });
       
       const data = await response.json();
@@ -63,42 +85,51 @@ function App() {
         throw new Error(data.error || 'Failed to extract text');
       }
       
-      setWords(data.words);
-      setView('reader');
+      openDocument(data.text, new URL(urlString).hostname);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [url]);
+  }, [openDocument]);
 
-  const handleTextLoad = useCallback(async () => {
-    if (!text.trim()) return;
-    
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const response = await fetch('/api/extract/text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.trim() })
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to process text');
-      }
-      
-      setWords(data.words);
-      setView('reader');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+  const handleUrlLoad = useCallback(() => {
+    if (!url.trim()) return;
+    loadFromUrl(url.trim());
+  }, [url, loadFromUrl]);
+
+  // Share-target intake: /share?share_url=...&share_text=... (from the PWA
+  // share sheet). Some apps put the URL in the text field, so check both.
+  const shareHandledRef = useRef(false);
+  useEffect(() => {
+    if (shareHandledRef.current) return;
+    shareHandledRef.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const isShare = window.location.pathname === '/share';
+    if (!isShare) return;
+
+    const sharedText = params.get('share_text') || '';
+    const sharedTitle = params.get('share_title') || '';
+    const urlInText = sharedText.match(/https?:\/\/\S+/)?.[0];
+    const sharedUrl = params.get('share_url') || urlInText;
+
+    window.history.replaceState({}, '', '/');
+
+    if (sharedUrl) {
+      loadFromUrl(sharedUrl);
+    } else if (sharedText.trim()) {
+      openDocument(sharedText.trim(), sharedTitle || 'Shared text');
     }
-  }, [text]);
+  }, [loadFromUrl, openDocument]);
+
+  const handleTextLoad = useCallback(() => {
+    if (!text.trim()) return;
+    setError(null);
+    // Pasted text needs no server round-trip: tokenize locally
+    const title = text.trim().split(/\s+/).slice(0, 5).join(' ');
+    openDocument(text.trim(), title);
+  }, [text, openDocument]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
@@ -119,13 +150,24 @@ function App() {
     setView('upload');
     setWords([]);
     setBookTitle('');
+    setDocId(null);
+    setStartPosition(0);
     setError(null);
+    setSavedDocs(getLibrary()); // refresh Continue Reading list
   }, []);
 
-  const handleBookSelect = useCallback((wordsArray, title = '') => {
-    setWords(wordsArray);
-    setBookTitle(title || 'Book');
-    setView('reader');
+  const handleBookSelect = useCallback((bookText, title = '') => {
+    openDocument(bookText, title || 'Book');
+  }, [openDocument]);
+
+  const handleResume = useCallback((doc) => {
+    openDocument(doc.text, doc.title, doc.position);
+  }, [openDocument]);
+
+  const handleRemoveDoc = useCallback((e, id) => {
+    e.stopPropagation();
+    removeDoc(id);
+    setSavedDocs(getLibrary());
   }, []);
 
   // Drag and drop visual feedback
@@ -147,7 +189,15 @@ function App() {
   }, [handleDrop]);
 
   if (view === 'reader') {
-    return <TunnelReader words={words} onBack={handleBack} title={bookTitle} />;
+    return (
+      <TunnelReader
+        words={words}
+        onBack={handleBack}
+        title={bookTitle}
+        initialPosition={startPosition}
+        onProgress={handleProgress}
+      />
+    );
   }
 
   return (
@@ -157,6 +207,36 @@ function App() {
       </header>
 
       <main className="upload-section">
+        {savedDocs.length > 0 && (
+          <div className="continue-section">
+            <h2 className="continue-title">Continue reading</h2>
+            <div className="continue-list">
+              {savedDocs.map(doc => {
+                const pct = doc.wordCount > 0
+                  ? Math.min(100, Math.round((doc.position / doc.wordCount) * 100))
+                  : 0;
+                return (
+                  <button key={doc.id} className="continue-item" onClick={() => handleResume(doc)}>
+                    <span className="continue-item-title">{doc.title}</span>
+                    <span className="continue-item-meta">
+                      {pct}% · {doc.wordCount.toLocaleString()} words
+                    </span>
+                    <span
+                      className="continue-item-remove"
+                      role="button"
+                      aria-label="Remove from library"
+                      onClick={(e) => handleRemoveDoc(e, doc.id)}
+                    >
+                      ✕
+                    </span>
+                    <span className="continue-item-bar" style={{ width: `${pct}%` }} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="upload-tabs">
           <button 
             className={`tab-btn ${activeTab === 'file' ? 'active' : ''}`}
@@ -203,12 +283,12 @@ function App() {
               id="file-input"
               type="file"
               className="file-input"
-              accept=".pdf,.txt,.md,.epub"
+              accept=".pdf,.epub,.docx,.doc,.rtf,.odt,.html,.htm,.txt,.md,.markdown,.text"
               onChange={(e) => handleFileUpload(e.target.files[0])}
             />
             <h3>Drop a file here, or click to browse</h3>
             <p style={{ color: '#888', marginTop: '0.5rem' }}>
-              Supports PDF, TXT, MD, EPUB (max 10MB)
+              Supports PDF, EPUB, Word, RTF, ODT, HTML, TXT, MD (max 10MB)
             </p>
           </div>
         )}
@@ -252,7 +332,7 @@ function App() {
         )}
 
         {activeTab === 'browse' && (
-          <BrowseLibrary onBookSelect={handleBookSelect} />
+          <BrowseLibrary onBookSelect={handleBookSelect} savedDocs={savedDocs} onResume={handleResume} />
         )}
       </main>
     </div>
