@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
-const { extractFromPDF, extractFromURL, extractFromText, extractFromEPUB } = require('./extractor');
+const { extractFromPDF, extractFromURL, extractFromText, extractFromEPUB, extractFromDOC, extractFromRTF, extractFromODT, extractFromHTMLFile, assertPublicUrl, blockPrivateRedirects } = require('./extractor');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -28,12 +28,12 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.pdf', '.txt', '.md', '.doc', '.docx', '.epub'];
+    const allowedTypes = ['.pdf', '.txt', '.md', '.markdown', '.text', '.doc', '.docx', '.rtf', '.odt', '.html', '.htm', '.epub'];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowedTypes.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Allowed: PDF, TXT, MD, DOC, DOCX, EPUB'));
+      cb(new Error('Invalid file type. Allowed: PDF, EPUB, DOCX, DOC, RTF, ODT, HTML, TXT, MD'));
     }
   }
 });
@@ -64,25 +64,32 @@ app.post('/api/extract/file', upload.single('file'), async (req, res) => {
     
     let text = '';
     
-    if (ext === '.pdf') {
-      text = await extractFromPDF(filePath);
-    } else if (ext === '.epub') {
-      text = await extractFromEPUB(filePath);
-    } else {
-      // For txt, md, etc.
-      text = fs.readFileSync(filePath, 'utf-8');
+    try {
+      if (ext === '.pdf') {
+        text = await extractFromPDF(filePath);
+      } else if (ext === '.epub') {
+        text = await extractFromEPUB(filePath);
+      } else if (ext === '.docx' || ext === '.doc') {
+        text = await extractFromDOC(filePath);
+      } else if (ext === '.rtf') {
+        text = extractFromRTF(filePath);
+      } else if (ext === '.odt') {
+        text = extractFromODT(filePath);
+      } else if (ext === '.html' || ext === '.htm') {
+        text = extractFromHTMLFile(filePath);
+      } else {
+        // Plain text formats: txt, md, markdown, text
+        text = fs.readFileSync(filePath, 'utf-8');
+      }
+    } finally {
+      // Clean up uploaded file even if extraction fails
+      fs.unlinkSync(filePath);
     }
 
-    // Clean up uploaded file
-    fs.unlinkSync(filePath);
-
-    // Process text into words with metadata
-    const words = processText(text);
-    
+    // Tokenization now happens client-side; return plain text
     res.json({ 
       success: true, 
-      wordCount: words.length,
-      words: words
+      text
     });
   } catch (error) {
     console.error('File extraction error:', error);
@@ -100,37 +107,13 @@ app.post('/api/extract/url', async (req, res) => {
     }
 
     const text = await extractFromURL(url);
-    const words = processText(text);
     
     res.json({ 
       success: true, 
-      wordCount: words.length,
-      words: words
+      text
     });
   } catch (error) {
     console.error('URL extraction error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Extract from pasted text
-app.post('/api/extract/text', (req, res) => {
-  try {
-    const { text } = req.body;
-    
-    if (!text || !text.trim()) {
-      return res.status(400).json({ error: 'Text required' });
-    }
-
-    const words = processText(text);
-    
-    res.json({ 
-      success: true, 
-      wordCount: words.length,
-      words: words
-    });
-  } catch (error) {
-    console.error('Text extraction error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -538,6 +521,8 @@ app.post('/api/extract/external', async (req, res) => {
       return res.status(400).json({ error: 'URL required' });
     }
 
+    await assertPublicUrl(url);
+
     // Detect source type from URL
     const isEpub = url.toLowerCase().includes('.epub');
     const isGutenbergTxt = url.includes('gutenberg.org') && (url.includes('.txt'));
@@ -550,18 +535,23 @@ app.post('/api/extract/external', async (req, res) => {
       const response = await axios.get(url, {
         responseType: 'arraybuffer',
         timeout: 120000,
-        headers: { 'User-Agent': 'TunnelReader/1.0' }
+        headers: { 'User-Agent': 'TunnelReader/1.0' },
+        beforeRedirect: blockPrivateRedirects
       });
       
       tempFile = path.join(__dirname, 'uploads', `${Date.now()}-temp.epub`);
       fs.writeFileSync(tempFile, response.data);
-      text = await extractFromEPUB(tempFile);
-      fs.unlinkSync(tempFile);
+      try {
+        text = await extractFromEPUB(tempFile);
+      } finally {
+        fs.unlinkSync(tempFile);
+      }
     } else if (isGutenbergTxt) {
       // Gutenberg .txt URLs return raw text with Project Gutenberg header
       const response = await axios.get(url, {
         timeout: 60000,
-        headers: { 'User-Agent': 'TunnelReader/1.0' }
+        headers: { 'User-Agent': 'TunnelReader/1.0' },
+        beforeRedirect: blockPrivateRedirects
       });
       
       let rawText = response.data;
@@ -586,12 +576,9 @@ app.post('/api/extract/external', async (req, res) => {
       text = await extractFromURL(url);
     }
 
-    const words = processText(text);
-    
     res.json({ 
       success: true, 
-      wordCount: words.length,
-      words,
+      text,
       title
     });
   } catch (error) {
@@ -600,60 +587,16 @@ app.post('/api/extract/external', async (req, res) => {
   }
 });
 
-// Process text into word objects with ORP info
-function processText(text) {
-  // Clean up text
-  const cleaned = text
-    .replace(/\s+/g, ' ')
-    .replace(/[^\w\s.,!?;:()-]/g, '')
-    .trim();
-  
-  const words = cleaned.split(/\s+/).filter(w => w.length > 0);
-  
-  return words.map((word, index) => {
-    // Strip punctuation for length calculation
-    const cleanWord = word.replace(/[.,!?;:()-]/g, '');
-    const length = cleanWord.length;
-    
-    const isEven = length % 2 === 0;
-    
-    // With monospace font, centering is exact math:
-    // - Odd: middle character (floor(n/2)) is exactly at center
-    // - Even: character at n/2 puts the gap at visual center (standard RSVP)
-    let middleIndex;
-    let shiftRight = 0;
-    
-    if (isEven) {
-      // Even: character at position n/2 (the first of the "right half")
-      // This puts the visual center at the gap after this character
-      middleIndex = length / 2;
-    } else {
-      // Odd: exact middle character
-      middleIndex = Math.floor(length / 2);
-    }
-    
-    // Split word into: before middle, middle char, after middle
-    const beforeORP = word.slice(0, middleIndex);
-    const orpChar = word[middleIndex];
-    const afterORP = word.slice(middleIndex + 1);
-    
-    return {
-      index,
-      original: word,
-      beforeORP,
-      orpChar,
-      afterORP,
-      orpIndex: middleIndex,
-      length,
-      isEven,
-      shiftRight
-    };
-  });
-}
-
 // Serve React app in production
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
+});
+
+// JSON errors for middleware failures (e.g. multer rejecting a dropped file
+// type) — without this the client receives an HTML error page it can't parse
+app.use((err, req, res, next) => {
+  console.error('Request error:', err.message);
+  res.status(400).json({ error: err.message });
 });
 
 app.listen(PORT, HOST, () => {

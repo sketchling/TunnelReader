@@ -786,3 +786,195 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Pause context: surrounding sentence shown while paused */
+.context-view {
+  position: fixed;
+  top: calc(33vh + 110px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(88vw, 700px);
+  text-align: center;
+  font-size: clamp(0.95rem, 2.5vw, 1.15rem);
+  line-height: 1.7;
+  color: var(--text-secondary, #888);
+  z-index: 15;
+  animation: contextFadeIn 0.25s ease-out;
+  pointer-events: none;
+}
+
+.context-word.current {
+  color: var(--text-primary, #eee);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent-red, #e74c3c);
+}
+
+@keyframes contextFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@media (max-width: 640px) {
+  .context-view {
+    top: calc(33vh + 90px);
+    width: 92vw;
+    font-size: 0.9rem;
+  }
+}
+
+/* Touch gesture surface: covers the word zone (above word display, below bottom UI) */
+.gesture-surface {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50vh;
+  z-index: 25;
+  touch-action: none;              /* we own horizontal drags here */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;     /* no long-press callout mid-swipe */
+  cursor: pointer;
+}
+
+/* Continue Reading (saved documents) */
+.continue-section {
+  width: 100%;
+  margin-bottom: 1.5rem;
+}
+
+.continue-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 0.6rem;
+}
+
+.continue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.continue-item {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.7rem 2.4rem 0.8rem 0.9rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+.continue-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.continue-item-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.continue-item-meta {
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.continue-item-remove {
+  position: absolute;
+  top: 50%;
+  right: 0.6rem;
+  transform: translateY(-50%);
+  padding: 0.3rem 0.45rem;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  touch-action: manipulation;
+}
+
+.continue-item-remove:hover {
+  color: var(--accent-red);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.continue-item-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent-red);
+  opacity: 0.7;
+}
+
+/* Unified browse: full-width live search, card info button, download state */
+.search-input-full {
+  width: 100%;
+  margin-bottom: 0.75rem;
+  font-size: 16px; /* prevents iOS zoom-on-focus */
+}
+
+.book-card {
+  position: relative;
+}
+
+.book-info-btn {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(10, 10, 15, 0.65);
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.book-info-btn:hover {
+  color: var(--text-primary);
+}
+
+.book-card.downloading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.book-downloading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 15, 0.7);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  border-radius: inherit;
+}
+
+/* In-library badge on browse cards */
+.book-resume-badge {
+  display: inline-block;
+  margin-top: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-red);
+  border: 1px solid var(--accent-red);
+  border-radius: 999px;
+  opacity: 0.9;
+}
