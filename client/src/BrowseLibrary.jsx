@@ -3,18 +3,18 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 const API_URL = ''; // Same origin: Vite proxy in dev, Express serves the build in prod
 
 // All catalogs are searched together; source is an implementation detail.
-const SOURCE_IDS = ['gutenberg', 'standardEbooks', 'openlibrary', 'archive'];
+// Standard Ebooks is omitted: its OPDS feed now returns 401, so querying it
+// only wasted a request per search.
+const SOURCE_IDS = ['gutenberg', 'openlibrary', 'archive'];
 
 const SEARCH_ENDPOINTS = {
   gutenberg: (q, p) => `/api/catalog/search?source=gutenberg&query=${encodeURIComponent(q)}&page=${p}`,
-  standardEbooks: (q, p) => `/api/catalog/search?source=standardEbooks&query=${encodeURIComponent(q)}&page=${p}`,
   openlibrary: (q, p) => `/api/openlibrary/search?query=${encodeURIComponent(q)}&page=${p}`,
   archive: (q, p) => `/api/archive/search?query=${encodeURIComponent(q)}&page=${p}`
 };
 
 const DETAIL_ENDPOINTS = {
   gutenberg: (id) => `/api/catalog/book/gutenberg/${id}`,
-  standardEbooks: (id) => `/api/catalog/book/standardEbooks/${id}`,
   openlibrary: (id) => `/api/openlibrary/book/${id}`,
   archive: (id) => `/api/archive/book/${id}`
 };
