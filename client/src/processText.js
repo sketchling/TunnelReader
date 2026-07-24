@@ -115,6 +115,14 @@ function mapCleanIndexToOriginal(word, cleanIndex) {
   return Math.floor(word.length / 2);
 }
 
+// Break a compound like "well-being" into ["well-", "being"] so each RSVP
+// frame is a short, readable chunk with the hyphen trailing the first half.
+// Only splits hyphens flanked by letters/digits, so dangling hyphens ("-ish",
+// "self-") and em/en dashes ("end—start") stay whole.
+function splitHyphenated(token) {
+  return token.split(/(?<=[\p{L}\p{N}]-)(?=[\p{L}\p{N}])/u);
+}
+
 // Process text into word objects with ORP info
 export function processText(text) {
   // Normalise whitespace but preserve paragraph breaks; strip only
@@ -133,7 +141,7 @@ export function processText(text) {
   const rawWords = [];    // { word, endsParagraph }
 
   paragraphs.forEach((para, pIndex) => {
-    const paraWords = para.split(/\s+/).filter(w => w.length > 0);
+    const paraWords = para.split(/\s+/).filter(w => w.length > 0).flatMap(splitHyphenated);
     paraModel.push({ text: para, wordStart: rawWords.length, wordCount: paraWords.length });
     paraWords.forEach((word, wIndex) => {
       rawWords.push({
