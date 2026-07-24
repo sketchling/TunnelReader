@@ -17,21 +17,34 @@ function App() {
   const [bookTitle, setBookTitle] = useState('');
   const [docId, setDocId] = useState(null);
   const [startPosition, setStartPosition] = useState(0);
+  const [chapters, setChapters] = useState([]);
+  const [contentStart, setContentStart] = useState({ index: 0, confident: false });
   const [savedDocs, setSavedDocs] = useState(() => getLibrary());
 
   // Single path for opening any document: tokenize, persist, enter reader
   const openDocument = useCallback((rawText, title, position = 0) => {
-    const { words } = processText(rawText);
+    const { words, chapters, contentStart } = processText(rawText);
     if (words.length === 0) {
       setError('No readable text found');
       return;
     }
     const id = saveDoc({ title: title || 'Untitled', text: rawText, wordCount: words.length });
-    if (id && position > 0) updatePosition(id, position);
+
+    // Resume respects the saved position; a fresh open skips to the first
+    // chapter only when detection is confident, else starts at the top.
+    let start;
+    if (position > 0) start = Math.min(position, words.length - 1);
+    else if (contentStart.confident) start = contentStart.index;
+    else start = 0;
+
+    if (id && start > 0) updatePosition(id, start); // seed so resume % agrees
+
     setWords(words);
+    setChapters(chapters);
+    setContentStart(contentStart);
     setBookTitle(title || '');
     setDocId(id);
-    setStartPosition(Math.min(position, words.length - 1));
+    setStartPosition(start);
     setView('reader');
   }, []);
 
@@ -152,6 +165,8 @@ function App() {
     setBookTitle('');
     setDocId(null);
     setStartPosition(0);
+    setChapters([]);
+    setContentStart({ index: 0, confident: false });
     setError(null);
     setSavedDocs(getLibrary()); // refresh Continue Reading list
   }, []);
@@ -192,6 +207,8 @@ function App() {
     return (
       <TunnelReader
         words={words}
+        chapters={chapters}
+        contentStart={contentStart}
         onBack={handleBack}
         title={bookTitle}
         initialPosition={startPosition}
