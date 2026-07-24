@@ -237,6 +237,15 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
     return { downloadUrl, textUrl };
   };
 
+  // Lending-only book: hand off to the official reader (Open Library / Archive)
+  // to borrow, rather than attempting a download that would 401.
+  const openReader = useCallback((book) => {
+    const url = book.readerUrl
+      || (book.source === 'openlibrary' ? `https://openlibrary.org/works/${book.id}`
+        : book.source === 'archive' ? `https://archive.org/details/${book.id}` : null);
+    if (url) window.open(url, '_blank', 'noopener');
+  }, []);
+
   // One tap to read: fetch details if needed, download, straight into the reader
   const readBook = useCallback(async (book) => {
     const key = dedupeKey(book);
@@ -250,16 +259,10 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
         ({ downloadUrl, textUrl } = resolveDownloadUrl(full));
       }
 
-      // Open Library borrow-only book (no download URL)
-      if (full.borrowUrl && !downloadUrl && !textUrl) {
-        alert('This book is available through Open Library borrowing. Opening it in your browser.');
-        window.open(full.borrowUrl, '_blank');
-        return;
-      }
-
       const urlToUse = downloadUrl || textUrl;
+      // No readable URL (lending-only, or nothing available): send to borrowing
       if (!urlToUse) {
-        alert('No download format available for this book');
+        openReader(full);
         return;
       }
 
@@ -271,7 +274,10 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
 
       const data = await response.json();
 
-      if (data.success) {
+      if (data.locked) {
+        // Looked open but the scan is access-restricted — hand off to borrowing
+        openReader(full);
+      } else if (data.success) {
         onBookSelect(data.text, full.title);
       } else {
         alert('Failed to download book: ' + (data.error || 'Unknown error'));
@@ -282,7 +288,7 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
     } finally {
       setDownloadingKey(null);
     }
-  }, [fetchDetails, onBookSelect]);
+  }, [fetchDetails, onBookSelect, openReader]);
 
   // Info icon: open the details modal (the old two-step path, now optional)
   const openDetails = useCallback(async (e, book) => {
@@ -391,6 +397,7 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
                 onClick={() => {
                   if (downloadingKey) return;
                   if (savedDoc && onResume) onResume(savedDoc);
+                  else if (book.access === 'borrow') openReader(book);
                   else readBook(book);
                 }}
               >
@@ -398,8 +405,10 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
                 <div className="book-info">
                   <h3 className="book-title">{book.title}</h3>
                   <p className="book-author">{book.authors}</p>
-                  {savedDoc && (
+                  {savedDoc ? (
                     <span className="book-resume-badge">Resume · {savedPct}%</span>
+                  ) : book.access === 'borrow' && (
+                    <span className="book-borrow-badge">Borrow ↗</span>
                   )}
                 </div>
                 <button
@@ -448,13 +457,22 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
             )}
 
             <div className="modal-actions">
-              <button
-                className="read-btn"
-                onClick={() => { handleClose(); readBook(selectedBook); }}
-                disabled={!!downloadingKey}
-              >
-                {downloadingKey ? 'Downloading...' : 'Read Now'}
-              </button>
+              {selectedBook.access === 'borrow' ? (
+                <button
+                  className="read-btn"
+                  onClick={() => { handleClose(); openReader(selectedBook); }}
+                >
+                  Borrow ↗
+                </button>
+              ) : (
+                <button
+                  className="read-btn"
+                  onClick={() => { handleClose(); readBook(selectedBook); }}
+                  disabled={!!downloadingKey}
+                >
+                  {downloadingKey ? 'Downloading...' : 'Read Now'}
+                </button>
+              )}
             </div>
           </div>
         </div>
