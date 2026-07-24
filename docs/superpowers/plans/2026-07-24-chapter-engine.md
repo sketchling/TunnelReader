@@ -193,7 +193,10 @@ function normalizeWhitespace(s) {
 function displayTitle(line) {
   const t = normalizeWhitespace(line);
   if (/[a-z]/.test(t)) return t;
-  return t.toLowerCase().replace(/\b([a-z])/g, (_, c) => c.toUpperCase());
+  // Capitalize the first letter of each whitespace-separated word. Note: use
+  // (^|\s) rather than \b, because \b treats an apostrophe as a boundary and
+  // would wrongly capitalize the "s" in "MARLEY'S" -> "Marley'S".
+  return t.toLowerCase().replace(/(^|\s)([a-z])/g, (_, sep, c) => sep + c.toUpperCase());
 }
 
 // Classify a single paragraph. Returns { kind, title } or null.
