@@ -8,3 +8,4 @@ client/build/
 client/dist/
 *.pdf
 dist/
+.superpowers/
