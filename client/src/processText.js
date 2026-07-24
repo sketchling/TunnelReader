@@ -43,6 +43,53 @@ export function matchHeading(paragraphText) {
   return null;
 }
 
+// paragraphs: [{ text, wordStart, wordCount }]. Returns { chapters, contentStart }.
+export function detectStructure(paragraphs, totalWords) {
+  // 1. Classify every paragraph.
+  const candidates = [];
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+    const h = matchHeading(p.text);
+    if (h) candidates.push({ ...h, paraIndex: i, wordStart: p.wordStart, headingWords: p.wordCount });
+  }
+
+  // 2. Merge a two-line title: an ordinal-ish heading immediately followed by a
+  //    caps/named heading paragraph.
+  const merged = [];
+  for (let c = 0; c < candidates.length; c++) {
+    const cur = candidates[c];
+    const next = candidates[c + 1];
+    const isOrdinal = cur.kind === 'labeled' || cur.kind === 'roman' || cur.kind === 'number';
+    if (next && next.paraIndex === cur.paraIndex + 1 && isOrdinal && (next.kind === 'caps' || next.kind === 'named')) {
+      merged.push({ ...cur, title: `${cur.title} · ${next.title}`, headingWords: cur.headingWords + next.headingWords });
+      c++; // consume next
+    } else {
+      merged.push(cur);
+    }
+  }
+
+  // 3. Confirm via "followed by prose" (rejects stacked TOC entries).
+  // 4. Dedupe headings closer than MIN_CHAPTER_GAP words.
+  const chapters = [];
+  for (let m = 0; m < merged.length; m++) {
+    const cur = merged[m];
+    const next = merged[m + 1];
+    const bodyStart = cur.wordStart + cur.headingWords;
+    const nextStart = next ? next.wordStart : totalWords;
+    const proseWords = nextStart - bodyStart;
+    if (proseWords < MIN_PROSE_WORDS) continue;
+    if (chapters.length && cur.wordStart - chapters[chapters.length - 1].index < MIN_CHAPTER_GAP) continue;
+    chapters.push({ index: cur.wordStart, title: cur.title });
+  }
+
+  // 5. Content start + confidence.
+  const first = chapters[0];
+  const confident = !!first && first.index > 0 && first.index < totalWords * SKIP_MAX_FRACTION;
+  const contentStart = { index: confident ? first.index : 0, confident };
+
+  return { chapters, contentStart };
+}
+
 // True ORP (Optimal Recognition Point), Spritz-style:
 // the eye recognises words fastest when anchored ~1/3 in, not at the centre.
 // Position is calculated on letter/digit characters only.
