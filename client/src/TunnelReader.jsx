@@ -1,12 +1,20 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { currentChapter, fractionToIndex, snapIndex } from './chapterNav';
 
-function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress }) {
+function TunnelReader({ words, chapters = [], contentStart = { index: 0, confident: false }, onBack, title, initialPosition = 0, onProgress }) {
   const [currentIndex, setCurrentIndex] = useState(initialPosition);
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(300);
   const [chunkSize, setChunkSize] = useState(1);
   const [isPaused, setIsPaused] = useState(initialPosition > 0);
-  
+  const [introPillVisible, setIntroPillVisible] = useState(
+    contentStart.confident && contentStart.index > 0
+  );
+  // Once the reader moves past the skip point, retire the pill.
+  useEffect(() => {
+    if (currentIndex > contentStart.index) setIntroPillVisible(false);
+  }, [currentIndex, contentStart.index]);
+
   const intervalRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -268,6 +276,7 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
     return { start, end };
   };
   const pauseContext = getPauseContext();
+  const chapterHere = currentChapter(chapters, currentIndex);
 
   return (
     <div className="app" ref={containerRef} tabIndex={0}>
@@ -276,6 +285,14 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
       </button>
 
       <div className="reader-container">
+        {introPillVisible && (
+          <button
+            className="intro-pill"
+            onClick={() => { setCurrentIndex(0); setIntroPillVisible(false); }}
+          >
+            ⏮ Intro skipped · tap to view
+          </button>
+        )}
         <div
           className="gesture-surface"
           onPointerDown={handlePointerDown}
@@ -322,6 +339,7 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
               />
             </div>
             <div className="progress-text">
+              {chapterHere && <span className="chapter-here">{chapterHere.title}</span>}
               Word {currentIndex + 1} of {words.length} • ~{estimatedTime} min remaining
             </div>
           </div>

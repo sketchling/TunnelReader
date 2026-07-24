@@ -1094,3 +1094,26 @@ body {
   border-radius: 999px;
   opacity: 0.85;
 }
+
+.intro-pill {
+  position: absolute;
+  top: 3.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  background: #1c1c22;
+  color: #c0c0c8;
+  border: 1px solid #2e2e36;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.intro-pill:hover { color: #fff; border-color: #3a3a44; }
+
+.chapter-here {
+  display: block;
+  color: #8a8a92;
+  font-size: 0.8rem;
+  margin-bottom: 0.15rem;
+}
