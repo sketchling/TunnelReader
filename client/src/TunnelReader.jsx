@@ -17,6 +17,30 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
 
   const intervalRef = useRef(null);
   const containerRef = useRef(null);
+  const barRef = useRef(null);
+  const barGestureRef = useRef(false);
+
+  const seekToClientX = useCallback((clientX) => {
+    const el = barRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const fraction = (clientX - rect.left) / rect.width;
+    setCurrentIndex(fractionToIndex(fraction, words.length));
+  }, [words.length]);
+
+  const handleBarPointerDown = useCallback((e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    barGestureRef.current = true;
+    setIsPlaying(false);
+    setIsPaused(true);
+    seekToClientX(e.clientX);
+  }, [seekToClientX]);
+  const handleBarPointerMove = useCallback((e) => {
+    if (barGestureRef.current) seekToClientX(e.clientX);
+  }, [seekToClientX]);
+  const handleBarPointerUp = useCallback(() => {
+    barGestureRef.current = false;
+  }, []);
 
   // Report reading position: throttled while reading, flushed on unmount
   const progressRef = useRef({ index: initialPosition, lastSent: 0 });
@@ -332,11 +356,29 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
 
         <div className="bottom-ui">
           <div className="progress-container">
-            <div className="progress-bar">
-              <div 
-                className="progress-fill" 
-                style={{ width: `${progress}%` }}
-              />
+            <div
+              className="progress-bar"
+              ref={barRef}
+              onPointerDown={handleBarPointerDown}
+              onPointerMove={handleBarPointerMove}
+              onPointerUp={handleBarPointerUp}
+              onPointerCancel={handleBarPointerUp}
+            >
+              {contentStart.index > 0 && (
+                <div
+                  className="progress-frontmatter"
+                  style={{ width: `${(contentStart.index / words.length) * 100}%` }}
+                />
+              )}
+              <div className="progress-fill" style={{ width: `${progress}%` }} />
+              {chapters.map((ch) => (
+                <div
+                  key={ch.index}
+                  className="progress-tick"
+                  style={{ left: `${(ch.index / words.length) * 100}%` }}
+                />
+              ))}
+              <div className="progress-thumb" style={{ left: `${progress}%` }} />
             </div>
             <div className="progress-text">
               {chapterHere && <span className="chapter-here">{chapterHere.title}</span>}
