@@ -164,6 +164,19 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
     setCurrentIndex(prev => Math.min(words.length - 1, prev + 10 * chunkSize));
   }, [chunkSize, words.length]);
 
+  const jumpChapter = useCallback((dir) => {
+    if (!chapters.length) return;
+    setCurrentIndex(prev => {
+      if (dir < 0) {
+        let target = 0;
+        for (const ch of chapters) { if (ch.index < prev - 1) target = ch.index; else break; }
+        return target;
+      }
+      for (const ch of chapters) { if (ch.index > prev) return ch.index; }
+      return prev;
+    });
+  }, [chapters]);
+
   // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -196,6 +209,14 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
           e.preventDefault();
           onBack();
           break;
+        case 'BracketLeft':
+          e.preventDefault();
+          jumpChapter(-1);
+          break;
+        case 'BracketRight':
+          e.preventDefault();
+          jumpChapter(1);
+          break;
         default:
           break;
       }
@@ -203,7 +224,7 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, advance, reset, onBack, chunkSize]);
+  }, [togglePlay, advance, reset, onBack, chunkSize, jumpChapter]);
 
   // Touch gestures on the word zone: tap = play/pause, horizontal drag = scrub.
   // Pointer events cover mouse, touch, and pencil (iOS 13+).
@@ -463,7 +484,7 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
           </div>
 
           <div className="keyboard-hint">
-            Space: Play/Pause • ← →: Navigate • ↑ ↓: Speed • Home: Reset • Esc: Back
+            Space: Play/Pause • ← →: Navigate • ↑ ↓: Speed{chapters.length > 0 ? ' • [ ]: Chapter' : ''} • Home: Reset • Esc: Back
           </div>
         </div>
       </div>
