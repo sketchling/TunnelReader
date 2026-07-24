@@ -11,14 +11,15 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 const HOST = process.env.HOST || '0.0.0.0';
 
+// The uploads directory is gitignored, so it's absent on a fresh deploy. Both
+// multer and the book-download path write here, so ensure it exists at boot.
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
+    cb(null, UPLOADS_DIR);
   },
   filename: (req, file, cb) => {
     cb(null, `${Date.now()}-${file.originalname}`);
@@ -543,7 +544,7 @@ app.post('/api/extract/external', async (req, res) => {
         beforeRedirect: blockPrivateRedirects
       });
       
-      tempFile = path.join(__dirname, 'uploads', `${Date.now()}-temp.epub`);
+      tempFile = path.join(UPLOADS_DIR, `${Date.now()}-temp.epub`);
       fs.writeFileSync(tempFile, response.data);
       try {
         text = await extractFromEPUB(tempFile);
