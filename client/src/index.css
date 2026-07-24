@@ -1145,3 +1145,21 @@ body {
   font-size: 0.8rem;
   margin-bottom: 0.15rem;
 }
+
+.chapter-tooltip {
+  position: absolute;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: 60vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: #17171d;
+  color: #f2f2f5;
+  border: 1px solid #2e2e36;
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  pointer-events: none;
+  z-index: 6;
+}

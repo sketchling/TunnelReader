@@ -19,6 +19,7 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
   const containerRef = useRef(null);
   const barRef = useRef(null);
   const barGestureRef = useRef(false);
+  const [barTip, setBarTip] = useState(null); // { leftPct, label } | null
 
   const seekToClientX = useCallback((clientX) => {
     const el = barRef.current;
@@ -28,19 +29,32 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
     setCurrentIndex(fractionToIndex(fraction, words.length));
   }, [words.length]);
 
+  const showTipAtClientX = useCallback((clientX) => {
+    const el = barRef.current;
+    if (!el || chapters.length === 0) return;
+    const rect = el.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const idx = fractionToIndex(fraction, words.length);
+    const ch = currentChapter(chapters, idx);
+    setBarTip({ leftPct: fraction * 100, label: ch ? ch.title : 'Front matter' });
+  }, [chapters, words.length]);
+
   const handleBarPointerDown = useCallback((e) => {
     e.currentTarget.setPointerCapture?.(e.pointerId);
     barGestureRef.current = true;
     setIsPlaying(false);
     setIsPaused(true);
     seekToClientX(e.clientX);
-  }, [seekToClientX]);
+    showTipAtClientX(e.clientX);
+  }, [seekToClientX, showTipAtClientX]);
   const handleBarPointerMove = useCallback((e) => {
-    if (barGestureRef.current) seekToClientX(e.clientX);
-  }, [seekToClientX]);
+    if (barGestureRef.current) { seekToClientX(e.clientX); showTipAtClientX(e.clientX); }
+  }, [seekToClientX, showTipAtClientX]);
   const handleBarPointerUp = useCallback(() => {
     barGestureRef.current = false;
-  }, []);
+    setCurrentIndex(prev => snapIndex(prev, chapters, words.length));
+    setBarTip(null);
+  }, [chapters, words.length]);
 
   // Report reading position: throttled while reading, flushed on unmount
   const progressRef = useRef({ index: initialPosition, lastSent: 0 });
@@ -363,6 +377,9 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
               onPointerMove={handleBarPointerMove}
               onPointerUp={handleBarPointerUp}
               onPointerCancel={handleBarPointerUp}
+              onPointerEnter={(e) => showTipAtClientX(e.clientX)}
+              onMouseMove={(e) => { if (!barGestureRef.current) showTipAtClientX(e.clientX); }}
+              onPointerLeave={() => { if (!barGestureRef.current) setBarTip(null); }}
             >
               {contentStart.index > 0 && (
                 <div
@@ -379,6 +396,11 @@ function TunnelReader({ words, chapters = [], contentStart = { index: 0, confide
                 />
               ))}
               <div className="progress-thumb" style={{ left: `${progress}%` }} />
+              {barTip && (
+                <div className="chapter-tooltip" style={{ left: `${barTip.leftPct}%` }}>
+                  {barTip.label}
+                </div>
+              )}
             </div>
             <div className="progress-text">
               {chapterHere && <span className="chapter-here">{chapterHere.title}</span>}
