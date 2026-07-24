@@ -1,14 +1,60 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { currentChapter, fractionToIndex, snapIndex } from './chapterNav';
 
-function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress }) {
+function TunnelReader({ words, chapters = [], contentStart = { index: 0, confident: false }, onBack, title, initialPosition = 0, onProgress }) {
   const [currentIndex, setCurrentIndex] = useState(initialPosition);
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(300);
   const [chunkSize, setChunkSize] = useState(1);
   const [isPaused, setIsPaused] = useState(initialPosition > 0);
-  
+  const [introPillVisible, setIntroPillVisible] = useState(
+    contentStart.confident && contentStart.index > 0
+  );
+  // Once the reader moves past the skip point, retire the pill.
+  useEffect(() => {
+    if (currentIndex > contentStart.index) setIntroPillVisible(false);
+  }, [currentIndex, contentStart.index]);
+
   const intervalRef = useRef(null);
   const containerRef = useRef(null);
+  const barRef = useRef(null);
+  const barGestureRef = useRef(false);
+  const [barTip, setBarTip] = useState(null); // { leftPct, label } | null
+
+  const seekToClientX = useCallback((clientX) => {
+    const el = barRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const fraction = (clientX - rect.left) / rect.width;
+    setCurrentIndex(fractionToIndex(fraction, words.length));
+  }, [words.length]);
+
+  const showTipAtClientX = useCallback((clientX) => {
+    const el = barRef.current;
+    if (!el || chapters.length === 0) return;
+    const rect = el.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const idx = fractionToIndex(fraction, words.length);
+    const ch = currentChapter(chapters, idx);
+    setBarTip({ leftPct: fraction * 100, label: ch ? ch.title : 'Front matter' });
+  }, [chapters, words.length]);
+
+  const handleBarPointerDown = useCallback((e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    barGestureRef.current = true;
+    setIsPlaying(false);
+    setIsPaused(true);
+    seekToClientX(e.clientX);
+    showTipAtClientX(e.clientX);
+  }, [seekToClientX, showTipAtClientX]);
+  const handleBarPointerMove = useCallback((e) => {
+    if (barGestureRef.current) { seekToClientX(e.clientX); showTipAtClientX(e.clientX); }
+  }, [seekToClientX, showTipAtClientX]);
+  const handleBarPointerUp = useCallback(() => {
+    barGestureRef.current = false;
+    setCurrentIndex(prev => snapIndex(prev, chapters, words.length));
+    setBarTip(null);
+  }, [chapters, words.length]);
 
   // Report reading position: throttled while reading, flushed on unmount
   const progressRef = useRef({ index: initialPosition, lastSent: 0 });
@@ -118,6 +164,19 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
     setCurrentIndex(prev => Math.min(words.length - 1, prev + 10 * chunkSize));
   }, [chunkSize, words.length]);
 
+  const jumpChapter = useCallback((dir) => {
+    if (!chapters.length) return;
+    setCurrentIndex(prev => {
+      if (dir < 0) {
+        let target = 0;
+        for (const ch of chapters) { if (ch.index < prev - 1) target = ch.index; else break; }
+        return target;
+      }
+      for (const ch of chapters) { if (ch.index > prev) return ch.index; }
+      return prev;
+    });
+  }, [chapters]);
+
   // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -150,6 +209,14 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
           e.preventDefault();
           onBack();
           break;
+        case 'BracketLeft':
+          e.preventDefault();
+          jumpChapter(-1);
+          break;
+        case 'BracketRight':
+          e.preventDefault();
+          jumpChapter(1);
+          break;
         default:
           break;
       }
@@ -157,7 +224,7 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, advance, reset, onBack, chunkSize]);
+  }, [togglePlay, advance, reset, onBack, chunkSize, jumpChapter]);
 
   // Touch gestures on the word zone: tap = play/pause, horizontal drag = scrub.
   // Pointer events cover mouse, touch, and pencil (iOS 13+).
@@ -268,6 +335,7 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
     return { start, end };
   };
   const pauseContext = getPauseContext();
+  const chapterHere = currentChapter(chapters, currentIndex);
 
   return (
     <div className="app" ref={containerRef} tabIndex={0}>
@@ -276,6 +344,14 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
       </button>
 
       <div className="reader-container">
+        {introPillVisible && (
+          <button
+            className="intro-pill"
+            onClick={() => { setCurrentIndex(0); setIntroPillVisible(false); }}
+          >
+            ⏮ Intro skipped · tap to view
+          </button>
+        )}
         <div
           className="gesture-surface"
           onPointerDown={handlePointerDown}
@@ -315,13 +391,40 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
 
         <div className="bottom-ui">
           <div className="progress-container">
-            <div className="progress-bar">
-              <div 
-                className="progress-fill" 
-                style={{ width: `${progress}%` }}
-              />
+            <div
+              className="progress-bar"
+              ref={barRef}
+              onPointerDown={handleBarPointerDown}
+              onPointerMove={handleBarPointerMove}
+              onPointerUp={handleBarPointerUp}
+              onPointerCancel={handleBarPointerUp}
+              onPointerEnter={(e) => showTipAtClientX(e.clientX)}
+              onMouseMove={(e) => { if (!barGestureRef.current) showTipAtClientX(e.clientX); }}
+              onPointerLeave={() => { if (!barGestureRef.current) setBarTip(null); }}
+            >
+              {contentStart.index > 0 && (
+                <div
+                  className="progress-frontmatter"
+                  style={{ width: `${(contentStart.index / words.length) * 100}%` }}
+                />
+              )}
+              <div className="progress-fill" style={{ width: `${progress}%` }} />
+              {chapters.map((ch) => (
+                <div
+                  key={ch.index}
+                  className="progress-tick"
+                  style={{ left: `${(ch.index / words.length) * 100}%` }}
+                />
+              ))}
+              <div className="progress-thumb" style={{ left: `${progress}%` }} />
+              {barTip && (
+                <div className="chapter-tooltip" style={{ left: `${barTip.leftPct}%` }}>
+                  {barTip.label}
+                </div>
+              )}
             </div>
             <div className="progress-text">
+              {chapterHere && <span className="chapter-here">{chapterHere.title}</span>}
               Word {currentIndex + 1} of {words.length} • ~{estimatedTime} min remaining
             </div>
           </div>
@@ -381,7 +484,7 @@ function TunnelReader({ words, onBack, title, initialPosition = 0, onProgress })
           </div>
 
           <div className="keyboard-hint">
-            Space: Play/Pause • ← →: Navigate • ↑ ↓: Speed • Home: Reset • Esc: Back
+            Space: Play/Pause • ← →: Navigate • ↑ ↓: Speed{chapters.length > 0 ? ' • [ ]: Chapter' : ''} • Home: Reset • Esc: Back
           </div>
         </div>
       </div>
