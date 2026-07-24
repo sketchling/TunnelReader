@@ -1,6 +1,48 @@
 // Tokenize raw text into word objects with ORP metadata.
 // Runs client-side so the server only ships plain text (~10x smaller payloads).
 
+// --- Chapter detection -----------------------------------------------------
+const HEADING_MAX_WORDS = 7;    // headings are short lines
+const MIN_PROSE_WORDS = 40;     // body words after a heading to confirm it (TOC filter)
+const MIN_CHAPTER_GAP = 40;     // min words between two confirmed chapters
+const SKIP_MAX_FRACTION = 0.30; // auto-skip only if content starts within first 30%
+
+const LABELED = /^(chapter|stave|part|book|section|canto|act|scene|letter)\s+([0-9]+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)\b/i;
+const NAMED = /^(prologue|epilogue|introduction|preface|foreword|afterword|conclusion|interlude)\b/i;
+const ORDINAL_TITLE = /^([0-9]{1,3}|[ivxlcdm]+)[.:)]\s+\S/i; // "I. The Beginning", "12: A New Day"
+const ROMAN = /^[ivxlcdm]+\.?$/i;
+const NUMBER = /^[0-9]{1,3}\.?$/;
+
+function normalizeWhitespace(s) {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+// Title-case an ALL-CAPS heading for display; leave anything with lowercase as-is.
+function displayTitle(line) {
+  const t = normalizeWhitespace(line);
+  if (/[a-z]/.test(t)) return t;
+  return t.toLowerCase().replace(/(^|\s)([a-z])/g, (_, sep, c) => sep + c.toUpperCase());
+}
+
+// Classify a single paragraph. Returns { kind, title } or null.
+export function matchHeading(paragraphText) {
+  const line = normalizeWhitespace(paragraphText);
+  if (!line) return null;
+  if (line.split(' ').length > HEADING_MAX_WORDS) return null;
+
+  if (LABELED.test(line))       return { kind: 'labeled',       title: displayTitle(line) };
+  if (NAMED.test(line))         return { kind: 'named',         title: displayTitle(line) };
+  if (ORDINAL_TITLE.test(line)) return { kind: 'ordinal-title', title: displayTitle(line) };
+  if (ROMAN.test(line))         return { kind: 'roman',         title: displayTitle(line) };
+  if (NUMBER.test(line))        return { kind: 'number',        title: line.replace(/\.$/, '') };
+
+  const hasLetter = /[a-z]/i.test(line);
+  const hasLower = /[a-z]/.test(line);
+  if (hasLetter && !hasLower)   return { kind: 'caps',          title: displayTitle(line) };
+
+  return null;
+}
+
 // True ORP (Optimal Recognition Point), Spritz-style:
 // the eye recognises words fastest when anchored ~1/3 in, not at the centre.
 // Position is calculated on letter/digit characters only.
