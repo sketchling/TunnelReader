@@ -194,6 +194,7 @@ app.get('/api/catalog/search', async (req, res) => {
           formats,
           covers: formats['image/jpeg'] ? [formats['image/jpeg']] : [],
           downloads: book.download_count || 0,
+          access: 'read', // Project Gutenberg is public domain
           // Pass both URLs so client can let user choose, but default to text
           textUrl,
           epubUrl
@@ -334,20 +335,34 @@ app.get('/api/openlibrary/search', async (req, res) => {
 
     const offset = (parseInt(page) - 1) * 20;
     const response = await axios.get(
-      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&offset=${offset}&limit=20`,
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&fields=key,title,author_name,first_publish_year,cover_i,ebook_access,ia&offset=${offset}&limit=20`,
       { timeout: 15000 }
     );
 
-    const docs = response.data.docs || [];
-    const books = docs.map(doc => ({
-      id: doc.key?.replace('/works/', '') || doc.id,
-      title: doc.title,
-      authors: doc.author_name?.join(', ') || 'Unknown',
-      publishYear: doc.first_publish_year,
-      coverId: doc.cover_i,
-      hasFullText: doc.has_fulltext || false,
-      ebookCount: doc.ebook_count_i || 0
-    }));
+    // ebook_access tells us whether a work is readable now or lending-only.
+    // Drop entries with no digital copy at all.
+    const OL_ACCESS = { public: 'read', borrowable: 'borrow', printdisabled: 'borrow' };
+    const books = (response.data.docs || [])
+      .map(doc => {
+        const access = OL_ACCESS[doc.ebook_access];
+        if (!access) return null;
+        const workId = doc.key?.replace('/works/', '') || doc.id;
+        const ia = Array.isArray(doc.ia) ? doc.ia[0] : null;
+        return {
+          id: workId,
+          title: doc.title,
+          authors: doc.author_name?.join(', ') || 'Unknown',
+          publishYear: doc.first_publish_year,
+          coverId: doc.cover_i,
+          access,
+          iaIdentifier: ia,
+          // Public-domain scans read straight from the Internet Archive text layer
+          textUrl: access === 'read' && ia ? `https://archive.org/download/${ia}/${ia}_djvu.txt` : null,
+          // Where to send the reader to borrow/read on the official site
+          readerUrl: `https://openlibrary.org/works/${workId}`
+        };
+      })
+      .filter(Boolean);
 
     res.json({ 
       success: true, 
@@ -451,19 +466,26 @@ app.get('/api/archive/search', async (req, res) => {
     const q = `${query} AND mediatype:texts`;
 
     const response = await axios.get(
-      `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=date&fl[]=downloads&rows=20&page=${page}&output=json`,
+      `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=date&fl[]=downloads&fl[]=access-restricted-item&rows=20&page=${page}&output=json`,
       { timeout: 15000 }
     );
 
     const docs = response.data.response.docs || [];
-    const books = docs.map(doc => ({
-      id: doc.identifier,
-      title: doc.title,
-      authors: doc.creator || 'Unknown',
-      year: doc.date,
-      downloads: doc.downloads,
-      coverUrl: `https://archive.org/services/img/${doc.identifier}`
-    }));
+    const books = docs.map(doc => {
+      // Restricted items are lending-only; their text/epub 401s without a loan.
+      const locked = String(doc['access-restricted-item']) === 'true';
+      return {
+        id: doc.identifier,
+        title: doc.title,
+        authors: doc.creator || 'Unknown',
+        year: doc.date,
+        downloads: doc.downloads,
+        coverUrl: `https://archive.org/services/img/${doc.identifier}`,
+        access: locked ? 'borrow' : 'read',
+        textUrl: locked ? null : `https://archive.org/download/${doc.identifier}/${doc.identifier}_djvu.txt`,
+        readerUrl: `https://archive.org/details/${doc.identifier}`
+      };
+    });
 
     res.json({ 
       success: true, 
@@ -577,16 +599,30 @@ app.post('/api/extract/external', async (req, res) => {
       }
       
       text = rawText.trim();
+    } else if (isIA && url.toLowerCase().endsWith('.txt')) {
+      // Internet Archive OCR text layer (public-domain items)
+      const response = await axios.get(url, {
+        timeout: 60000,
+        headers: { 'User-Agent': 'TunnelReader/1.0' },
+        beforeRedirect: blockPrivateRedirects
+      });
+      text = String(response.data).replace(/^\ufeff/, '').trim();
     } else {
       text = await extractFromURL(url);
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       text,
       title
     });
   } catch (error) {
+    // A 401/403 means the item is lending-only (a scan that looked open but
+    // is access-restricted). Signal the client to hand off to borrowing.
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      return res.json({ success: false, locked: true, error: 'This book is available to borrow only.' });
+    }
     console.error('External extraction error:', error);
     res.status(500).json({ error: error.message || 'Failed to extract text from external source' });
   }
