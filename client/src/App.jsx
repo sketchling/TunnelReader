@@ -21,17 +21,17 @@ function App() {
 
   // Single path for opening any document: tokenize, persist, enter reader
   const openDocument = useCallback((rawText, title, position = 0) => {
-    const processed = processText(rawText);
-    if (processed.length === 0) {
+    const { words } = processText(rawText);
+    if (words.length === 0) {
       setError('No readable text found');
       return;
     }
-    const id = saveDoc({ title: title || 'Untitled', text: rawText, wordCount: processed.length });
+    const id = saveDoc({ title: title || 'Untitled', text: rawText, wordCount: words.length });
     if (id && position > 0) updatePosition(id, position);
-    setWords(processed);
+    setWords(words);
     setBookTitle(title || '');
     setDocId(id);
-    setStartPosition(Math.min(position, processed.length - 1));
+    setStartPosition(Math.min(position, words.length - 1));
     setView('reader');
   }, []);
 

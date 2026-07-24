@@ -129,39 +129,37 @@ export function processText(text) {
     .trim();
 
   const paragraphs = cleaned.split('\u2029');
-  const words = [];
+  const paraModel = [];   // { text, wordStart, wordCount }
+  const rawWords = [];    // { word, endsParagraph }
 
   paragraphs.forEach((para, pIndex) => {
     const paraWords = para.split(/\s+/).filter(w => w.length > 0);
+    paraModel.push({ text: para, wordStart: rawWords.length, wordCount: paraWords.length });
     paraWords.forEach((word, wIndex) => {
-      words.push({
+      rawWords.push({
         word,
         endsParagraph: pIndex < paragraphs.length - 1 && wIndex === paraWords.length - 1
       });
     });
   });
 
-  return words.map(({ word, endsParagraph }, index) => {
-    // Letters/digits only for ORP position calculation
+  const words = rawWords.map(({ word, endsParagraph }, index) => {
     const cleanWord = word.replace(/[^\p{L}\p{N}]/gu, '');
     const length = cleanWord.length;
-
     const orpClean = orpPosition(length);
     const middleIndex = mapCleanIndexToOriginal(word, orpClean);
-
-    const beforeORP = word.slice(0, middleIndex);
-    const orpChar = word[middleIndex];
-    const afterORP = word.slice(middleIndex + 1);
-
     return {
       index,
       original: word,
-      beforeORP,
-      orpChar,
-      afterORP,
+      beforeORP: word.slice(0, middleIndex),
+      orpChar: word[middleIndex],
+      afterORP: word.slice(middleIndex + 1),
       orpIndex: middleIndex,
       length,
       endsParagraph
     };
   });
+
+  const { chapters, contentStart } = detectStructure(paraModel, words.length);
+  return { words, chapters, contentStart };
 }
