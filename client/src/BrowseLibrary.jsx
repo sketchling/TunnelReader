@@ -1,23 +1,32 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import BookCover from './BookCover';
 
-const API_URL = import.meta?.env?.DEV ? '' : `http://${window.location.hostname}:5000`;
+const API_URL = ''; // Same origin: Vite proxy in dev, Express serves the build in prod
 
 // All catalogs are searched together; source is an implementation detail.
-const SOURCE_IDS = ['gutenberg', 'standardEbooks', 'openlibrary', 'archive'];
+// Standard Ebooks is omitted: its OPDS feed now returns 401, so querying it
+// only wasted a request per search.
+const SOURCE_IDS = ['gutenberg', 'openlibrary', 'archive'];
 
 const SEARCH_ENDPOINTS = {
   gutenberg: (q, p) => `/api/catalog/search?source=gutenberg&query=${encodeURIComponent(q)}&page=${p}`,
-  standardEbooks: (q, p) => `/api/catalog/search?source=standardEbooks&query=${encodeURIComponent(q)}&page=${p}`,
   openlibrary: (q, p) => `/api/openlibrary/search?query=${encodeURIComponent(q)}&page=${p}`,
   archive: (q, p) => `/api/archive/search?query=${encodeURIComponent(q)}&page=${p}`
 };
 
 const DETAIL_ENDPOINTS = {
   gutenberg: (id) => `/api/catalog/book/gutenberg/${id}`,
-  standardEbooks: (id) => `/api/catalog/book/standardEbooks/${id}`,
   openlibrary: (id) => `/api/openlibrary/book/${id}`,
   archive: (id) => `/api/archive/book/${id}`
 };
+
+// The Library pill isolates results to one catalog (or searches all).
+const LIBRARY_SOURCES = [
+  { id: 'all', label: 'All libraries' },
+  { id: 'gutenberg', label: 'Project Gutenberg' },
+  { id: 'openlibrary', label: 'Open Library' },
+  { id: 'archive', label: 'Internet Archive' },
+];
 
 const GUTENBERG_GENRES = [
   { id: 'popular', label: 'Popular', search: '' }, // empty query = Gutendex popularity order
@@ -90,80 +99,79 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
   const [downloadingKey, setDownloadingKey] = useState(null);
   const [page, setPage] = useState(1);
   const [activeCategory, setActiveCategory] = useState('popular');
-  const [mode, setMode] = useState('category'); // 'category' | 'search'
+  const [librarySource, setLibrarySource] = useState('all'); // 'all' | source id
+  const [openMenu, setOpenMenu] = useState(null);             // 'genres' | 'library' | null
+  const [mode, setMode] = useState('browse');                 // 'browse' | 'search'
 
   // Discard out-of-order responses from stale searches
   const requestIdRef = useRef(0);
 
-  // One search box, every catalog: query all sources in parallel and merge
-  const searchAllSources = useCallback(async (searchQuery, pageNum) => {
-    const fetches = SOURCE_IDS.map(async (source) => {
-      try {
-        const response = await fetch(`${API_URL}${SEARCH_ENDPOINTS[source](searchQuery, pageNum)}`);
-        const data = await response.json();
-        if (!data.success) return [];
-        return (data.books || []).map(b => ({ ...b, source }));
-      } catch {
-        return [];
-      }
-    });
-    return Promise.all(fetches);
+  // Fetch a single catalog's results, tagged with their source.
+  const fetchOne = useCallback((source, term, pageNum) => {
+    // Non-Gutenberg catalogs have no empty-query "popular"; use a broad default.
+    const q = (term === '' && source !== 'gutenberg') ? 'classic literature' : term;
+    return fetch(`${API_URL}${SEARCH_ENDPOINTS[source](q, pageNum)}`)
+      .then(r => r.json())
+      .then(data => (data.success ? data.books || [] : []).map(b => ({ ...b, source })))
+      .catch(() => []);
   }, []);
 
-  const runSearch = useCallback(async (searchQuery, pageNum = 1, append = false) => {
+  // Single fetch+merge path for both genre browsing and searching. On a fresh
+  // view each catalog's results render the moment they arrive, so one slow
+  // source (e.g. a Gutendex timeout) never blocks the whole shelf.
+  const load = useCallback((term, pageNum, append, sources) => {
     const requestId = ++requestIdRef.current;
-    append ? setLoadingMore(true) : setLoading(true);
 
-    const resultsBySource = await searchAllSources(searchQuery, pageNum);
-    if (requestId !== requestIdRef.current) return; // stale
+    // Internet Archive has no real "popular" and its broad-term results are
+    // noisy, so keep it out of the default shelf unless it's the isolated source.
+    const effective = (term === '' && sources.length > 1)
+      ? sources.filter(s => s !== 'archive')
+      : sources;
 
-    setBooks(prev => {
-      if (!append) return mergeResults(resultsBySource);
-      const existingKeys = new Set(prev.map(dedupeKey));
-      return [...prev, ...mergeResults(resultsBySource, existingKeys)];
-    });
-    setPage(pageNum);
-    setMode('search');
-    setLoading(false);
-    setLoadingMore(false);
-  }, [searchAllSources]);
-
-  const browseCategory = useCallback(async (categoryId, pageNum = 1, append = false) => {
-    if (!categoryId) return;
-    const requestId = ++requestIdRef.current;
-    setActiveCategory(categoryId);
-    append ? setLoadingMore(true) : setLoading(true);
-
-    try {
-      const genre = GUTENBERG_GENRES.find(g => g.id === categoryId);
-      const search = genre ? genre.search : categoryId;
-      const endpoint = `/api/catalog/search?source=gutenberg&query=${encodeURIComponent(search)}&page=${pageNum}`;
-      const response = await fetch(`${API_URL}${endpoint}`);
-      const data = await response.json();
-      if (requestId !== requestIdRef.current) return; // stale
-
-      const tagged = (data.success ? data.books || [] : []).map(b => ({ ...b, source: 'gutenberg' }));
-      setBooks(prev => {
-        if (!append) return tagged;
-        const existingKeys = new Set(prev.map(dedupeKey));
-        return [...prev, ...tagged.filter(b => !existingKeys.has(dedupeKey(b)))];
-      });
-      setPage(pageNum);
-      setMode('category');
-    } catch (err) {
-      console.error('Browse error:', err);
-      if (!append) setBooks([]);
-    } finally {
-      if (requestId === requestIdRef.current) {
-        setLoading(false);
+    if (append) {
+      setLoadingMore(true);
+      Promise.all(effective.map(s => fetchOne(s, term, pageNum))).then(resultsBySource => {
+        if (requestId !== requestIdRef.current) return; // stale
+        setBooks(prev => [...prev, ...mergeResults(resultsBySource, new Set(prev.map(dedupeKey)))]);
+        setPage(pageNum);
         setLoadingMore(false);
-      }
+      });
+      return;
     }
-  }, []);
+
+    setLoading(true);
+    setPage(pageNum);
+    const resultsBySource = effective.map(() => []);
+    let settled = 0;
+    effective.forEach((source, i) => {
+      fetchOne(source, term, pageNum).then(list => {
+        if (requestId !== requestIdRef.current) return; // stale
+        resultsBySource[i] = list;
+        settled += 1;
+        setBooks(mergeResults(resultsBySource));
+        // Reveal as soon as any catalog has results; drop the spinner once done.
+        if (list.length > 0 || settled === effective.length) setLoading(false);
+      });
+    });
+  }, [fetchOne]);
+
+  const sourcesFor = (scope) => (scope === 'all' ? SOURCE_IDS : [scope]);
+
+  const loadGenre = useCallback((genreId, pageNum = 1, append = false) => {
+    setActiveCategory(genreId);
+    setMode('browse');
+    const genre = GUTENBERG_GENRES.find(g => g.id === genreId) || GUTENBERG_GENRES[0];
+    load(genre.search, pageNum, append, sourcesFor(librarySource));
+  }, [librarySource, load]);
+
+  const runSearch = useCallback((term, pageNum = 1, append = false) => {
+    setMode('search');
+    load(term, pageNum, append, sourcesFor(librarySource));
+  }, [librarySource, load]);
 
   // Initial shelf
   useEffect(() => {
-    browseCategory('popular', 1);
+    loadGenre('popular', 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -171,7 +179,7 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < 2) {
-      if (mode === 'search') browseCategory(activeCategory, 1);
+      if (mode === 'search') loadGenre(activeCategory, 1);
       return;
     }
     const timer = setTimeout(() => runSearch(trimmed, 1), 400);
@@ -179,13 +187,23 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
+  // Changing the library scope re-runs the current view (skip the first mount).
+  const firstScope = useRef(true);
+  useEffect(() => {
+    if (firstScope.current) { firstScope.current = false; return; }
+    const trimmed = query.trim();
+    if (mode === 'search' && trimmed.length >= 2) runSearch(trimmed, 1);
+    else loadGenre(activeCategory, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [librarySource]);
+
   const loadMore = useCallback(() => {
     if (mode === 'search') {
       runSearch(query.trim(), page + 1, true);
     } else {
-      browseCategory(activeCategory, page + 1, true);
+      loadGenre(activeCategory, page + 1, true);
     }
-  }, [mode, query, page, activeCategory, runSearch, browseCategory]);
+  }, [mode, query, page, activeCategory, runSearch, loadGenre]);
 
   const fetchDetails = useCallback(async (book) => {
     const endpoint = DETAIL_ENDPOINTS[book.source]?.(book.id);
@@ -303,20 +321,51 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
         placeholder="Search all libraries…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        autocorrect="off"
+        autoCorrect="off"
         autoCapitalize="none"
         spellCheck="false"
       />
 
-      {query.trim().length < 2 && (
-        <div className="category-chips">
+      <div className="browse-controls">
+        <button
+          className={`lib-pill ${openMenu === 'genres' ? 'open' : ''}`}
+          onClick={() => setOpenMenu(openMenu === 'genres' ? null : 'genres')}
+        >
+          {GUTENBERG_GENRES.find(g => g.id === activeCategory)?.label || 'Popular'}
+          <span className="caret" aria-hidden="true">▾</span>
+        </button>
+        <button
+          className={`lib-pill ${openMenu === 'library' ? 'open' : ''}`}
+          onClick={() => setOpenMenu(openMenu === 'library' ? null : 'library')}
+        >
+          {LIBRARY_SOURCES.find(s => s.id === librarySource)?.label || 'All libraries'}
+          <span className="caret" aria-hidden="true">▾</span>
+        </button>
+      </div>
+
+      {openMenu === 'genres' && (
+        <div className="lib-menu lib-menu-2col">
           {GUTENBERG_GENRES.map(g => (
             <button
               key={g.id}
-              className={`chip ${activeCategory === g.id ? 'active' : ''}`}
-              onClick={() => browseCategory(g.id, 1)}
+              className={`lib-menu-item ${activeCategory === g.id ? 'active' : ''}`}
+              onClick={() => { setOpenMenu(null); setQuery(''); loadGenre(g.id, 1); }}
             >
               {g.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {openMenu === 'library' && (
+        <div className="lib-menu">
+          {LIBRARY_SOURCES.map(s => (
+            <button
+              key={s.id}
+              className={`lib-menu-item ${librarySource === s.id ? 'active' : ''}`}
+              onClick={() => { setOpenMenu(null); setLibrarySource(s.id); }}
+            >
+              {s.label}
             </button>
           ))}
         </div>
@@ -345,15 +394,7 @@ function BrowseLibrary({ onBookSelect, savedDocs = [], onResume }) {
                   else readBook(book);
                 }}
               >
-                {getCoverUrl(book) && (
-                  <img
-                    src={getCoverUrl(book)}
-                    alt={book.title}
-                    className="book-cover"
-                    loading="lazy"
-                    onError={(e) => { e.target.style.display = 'none'; }}
-                  />
-                )}
+                <BookCover title={book.title} authors={book.authors} cover={getCoverUrl(book)} />
                 <div className="book-info">
                   <h3 className="book-title">{book.title}</h3>
                   <p className="book-author">{book.authors}</p>
